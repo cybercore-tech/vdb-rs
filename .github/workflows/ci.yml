@@ -1,0 +1,212 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  quality:
+    name: Format and Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check diff whitespace
+        run: git diff --check
+
+      - name: Clippy
+        run: >
+          cargo clippy
+          --workspace
+          --all-targets
+          --
+          -D warnings
+
+      - name: Clippy all features
+        run: >
+          cargo clippy
+          --workspace
+          --all-targets
+          --all-features
+          --
+          -D warnings
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check default features
+        run: >
+          cargo check
+          --workspace
+          --all-targets
+
+      - name: Test default features
+        run: >
+          cargo test
+          --workspace
+          --all-targets
+
+      - name: Check all features
+        run: >
+          cargo check
+          --workspace
+          --all-targets
+          --all-features
+
+      - name: Test all features
+        run: >
+          cargo test
+          --workspace
+          --all-features
+          --lib
+          --tests
+
+      - name: Test all-feature rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: >
+          cargo test
+          --workspace
+          --doc
+          --all-features
+
+      - name: Build strict rustdoc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: >
+          cargo doc
+          --workspace
+          --no-deps
+          --all-features
+
+      - name: Feature isolation — no default features
+        run: cargo check --workspace --no-default-features
+
+      # Every project-critical combination from PROJECT_SPEC.md's
+      # "Required Feature-Isolation Checks" (not committed — see
+      # .gitignore — kept in sync locally; scripts/validate-features.sh
+      # runs the same set).
+      - name: Feature isolation — project-critical combinations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for features in \
+            storage \
+            index-hnsw \
+            metrics \
+            serde-query \
+            storage,index-hnsw \
+            storage,index-hnsw,metrics \
+            storage,serde-query \
+          ; do
+            echo "===== --no-default-features --features $features ====="
+            cargo check -p vdb --no-default-features --features "$features"
+          done
+
+  package:
+    name: Package readiness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Inspect package contents
+        run: cargo package --list -p vdb
+
+  msrv:
+    name: MSRV 1.88
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve dependencies for MSRV
+        run: rm -f Cargo.lock
+
+      - name: Check all targets and features on MSRV
+        run: >
+          cargo check
+          --workspace
+          --all-targets
+          --all-features
+
+      - name: Test all targets and features on MSRV
+        run: >
+          cargo test
+          --workspace
+          --all-features
+          --lib
+          --tests
+
+      - name: Test rustdoc examples on MSRV
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: >
+          cargo test
+          --workspace
+          --doc
+          --all-features
+
+      - name: Build rustdoc on MSRV
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: >
+          cargo doc
+          --workspace
+          --no-deps
+          --all-features
