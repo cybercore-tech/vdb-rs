@@ -1,1 +1,13 @@
 /target
+
+# Agent-blueprint operating docs — maintainer-only planning/handoff state,
+# copied in from the rust-vdb-blueprint template. Not meant for the public
+# repo (same convention as darkstardevx/gateflow's own /docs/). The gate
+# scripts in scripts/ stay tracked; they're legitimately useful to anyone
+# cloning the repo.
+/AGENTS.md
+/PROJECT_SPEC.md
+/PROJECT_STATE.md
+/AGENT_HANDOFF.md
+/PROJECT AGENT BLUEPRINT.md
+/docs/
