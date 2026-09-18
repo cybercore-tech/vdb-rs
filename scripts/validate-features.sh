@@ -34,5 +34,8 @@ cargo check -p vdb --no-default-features --features storage,index-hnsw,metrics
 echo "  -> storage + serde-query"
 cargo check -p vdb --no-default-features --features storage,serde-query
 
+echo "  -> storage + metrics + serde-query (db.rs: VectorDb/Collection/QueryBuilder)"
+cargo check -p vdb --no-default-features --features storage,metrics,serde-query
+
 echo ""
 echo "FEATURE-ISOLATION GATE: GREEN"

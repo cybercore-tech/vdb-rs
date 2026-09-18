@@ -28,4 +28,17 @@ pub mod metric;
 #[cfg(feature = "serde-query")]
 pub mod query;
 
+/// `VectorDb`/`Collection`/`QueryBuilder` — the public API. Needs
+/// `storage` (KvEngine + VectorFile), `metrics` (Metric), and
+/// `serde-query` (Filter) all together.
+#[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+pub mod db;
+
 pub use error::{Error, Result};
+
+#[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+pub use db::{Collection, QueryBuilder, ScoredVector, VectorDb};
+#[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+pub use metric::Metric;
+#[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+pub use query::Filter;

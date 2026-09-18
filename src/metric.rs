@@ -27,6 +27,27 @@ impl Metric {
             Metric::DotProduct => dot(a, b),
         }
     }
+
+    /// The lowercase name this metric is stored as in a `CollectionConfig`
+    /// (see `crate::kv::CollectionConfig::metric`, the inverse of this).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Metric::Cosine => "cosine",
+            Metric::Euclidean => "euclidean",
+            Metric::DotProduct => "dot_product",
+        }
+    }
+
+    /// Does a *higher* [`Metric::distance`] value mean "more similar" for
+    /// this metric?
+    ///
+    /// `Cosine`/`Euclidean` are genuine distances (lower = closer);
+    /// `DotProduct` is a raw similarity score (higher = closer) — ranking
+    /// query results with a single ascending sort would silently invert
+    /// `DotProduct` results. Callers doing top-k ranking must check this.
+    pub fn higher_is_better(self) -> bool {
+        matches!(self, Metric::DotProduct)
+    }
 }
 
 fn dot(a: &[f32], b: &[f32]) -> f32 {
@@ -71,5 +92,25 @@ mod tests {
     #[test]
     fn euclidean_distance_matches_known_3_4_5_triangle() {
         assert_eq!(Metric::Euclidean.distance(&[0.0, 0.0], &[3.0, 4.0]), 5.0);
+    }
+
+    #[test]
+    fn only_dot_product_ranks_higher_as_better() {
+        assert!(!Metric::Cosine.higher_is_better());
+        assert!(!Metric::Euclidean.higher_is_better());
+        assert!(Metric::DotProduct.higher_is_better());
+    }
+
+    #[cfg(feature = "storage")]
+    #[test]
+    fn as_str_round_trips_through_collection_config_metric() {
+        for m in [Metric::Cosine, Metric::Euclidean, Metric::DotProduct] {
+            let config = crate::kv::CollectionConfig {
+                dim: 1,
+                metric: m.as_str().to_string(),
+                next_id: 0,
+            };
+            assert_eq!(config.metric(), Some(m));
+        }
     }
 }

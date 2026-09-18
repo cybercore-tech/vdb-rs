@@ -10,16 +10,17 @@
 Python bindings, just a library you link into your own binary.**
 
 `LMDB` (via [`heed`](https://docs.rs/heed)) holds structured metadata and
-the WAL. Vector payloads and the HNSW index live in per-collection,
-mmap'd files. The whole thing is invisible behind a small typed API —
-`VectorDb::open`, `create_collection`, `upsert_vector`,
-`query(...).filter(...)` — once that API exists (see [Status](#-status)
-below; it doesn't yet).
+the WAL. Vector payloads live in per-collection, mmap'd files. The whole
+thing is invisible behind a small typed API — `VectorDb::open`,
+`create_collection`, `upsert_vector`, `query(...).filter(...)` — see
+[what you can do with it today](#-what-you-can-actually-do-with-it-today).
 
-> ⚠️ **Pre-alpha. Not on crates.io. No `VectorDb` yet.** Phases 1–3 of 8
-> are done — the storage primitives (LMDB tables + `.vectors` read/write)
-> are real and tested, but there's no HNSW graph or collection/query API
-> on top of them yet. See [Status](#-status) for exactly what works today.
+> ⚠️ **Pre-alpha. Not on crates.io.** Phases 1–3 and 5 of 8 are done —
+> `VectorDb`/`Collection`/`QueryBuilder` are real and tested, including
+> filtered k-NN queries. What's missing: a real ANN index (queries are
+> brute-force linear scan today, not HNSW — see [Status](#-status)) and
+> WAL crash-recovery replay. Built Phase 5 ahead of Phase 4's HNSW
+> graph work on purpose — see [Roadmap](#️-roadmap) for why.
 
 ---
 
@@ -61,11 +62,10 @@ redb — accepted deliberately for the format/API maturity.
 
 ```
 ┌───────────────────────────────────────────┐
-│      Public API (VectorDb) — Phase 3       │
+│  Public API — VectorDb / Collection /      │
+│  QueryBuilder (src/db.rs)                  │
 │  create_collection, upsert_vector,         │
 │  query().filter().execute()                │
-├───────────────────────────────────────────┤
-│    Collection / QueryBuilder — Phase 3     │
 ├───────────────────────────────────────────┤
 │           KvEngine (src/kv.rs)             │
 │   LMDB via heed — collections/vectors/     │
@@ -73,30 +73,38 @@ redb — accepted deliberately for the format/API maturity.
 ├───────────────────────────────────────────┤
 │  Per-collection mmap files                 │
 │   • collection.vectors  (src/vector.rs)    │
-│   • collection.index    (src/index.rs)     │
+│   • collection.index    (src/index.rs,     │
+│     header-only — no real HNSW graph yet)  │
 └───────────────────────────────────────────┘
 ```
 
 ## ✅ Status
 
-What's real and unit-tested right now (19 tests: 18 unit + 1 integration):
+What's real and tested right now (40 tests: 38 unit + 2 integration):
 
+- [x] **`VectorDb` / `Collection` / `QueryBuilder`** (`src/db.rs`) —
+      create/open/list/delete collections, `upsert_vector`/
+      `delete_vector`, filtered k-NN `query()`
 - [x] **`KvEngine`** (`src/kv.rs`) — all four LMDB tables (`collections`,
       `vectors`, `metadata`, `logs`), typed `CollectionConfig`/
-      `VectorMeta`/`Operation`
+      `VectorMeta`/`Operation`, atomic per-collection ID allocation
 - [x] **`VectorFile` / `VectorFileWriter`** (`src/vector.rs`) — real
       `.vectors` read/write, 32-byte-aligned per the spec
-- [x] **`IndexFile`** (`src/index.rs`) — `.index` header read (magic,
-      `M`, `ef_construction`, `dim`); no real HNSW graph data yet
-- [x] **`Metric`** (`src/metric.rs`) — cosine, euclidean, dot product
+- [x] **`Metric`** (`src/metric.rs`) — cosine, euclidean, dot product,
+      correct ranking direction for each (dot product is a similarity —
+      higher is better — not a distance; genuinely easy to get backwards)
 - [x] **`Filter`** (`src/query.rs`) — single `field CONTAINS value`
       predicate; full DSL (`AND`/`OR`) is later
+- [ ] **`IndexFile`** (`src/index.rs`) — `.index` header read only (magic,
+      `M`, `ef_construction`, `dim`); no real HNSW graph data yet, so
+      `QueryBuilder::execute` is brute-force linear scan, not real ANN
 
 What doesn't exist yet:
 
-- [ ] Real HNSW graph traversal — `.index` files are still header-only (Phase 4)
-- [ ] `VectorDb` / `Collection` / `QueryBuilder` public API (Phase 5)
-- [ ] Full filter DSL (Phase 5)
+- [ ] Real HNSW graph traversal (Phase 4) — this is *the* thing that
+      makes queries scale; brute-force scan works but is O(n) per query
+- [ ] Full filter DSL (`AND`/`OR`, comparison operators, not just one
+      `CONTAINS` predicate)
 - [ ] WAL crash-recovery replay — `KvEngine::replay_log` returns recorded
       entries but doesn't re-apply them yet (Phase 6)
 - [ ] `quantization` / `index-ivf` / `async` — later-phase, off by
@@ -104,36 +112,31 @@ What doesn't exist yet:
 
 ## 🔧 What you can actually do with it today
 
-There's no high-level API yet, so this is the real shape of using it
-right now — verified as a real, passing integration test, not
+The real public API — verified as a real, passing integration test, not
 illustrative pseudocode (see
-[`tests/basic_round_trip.rs`](tests/basic_round_trip.rs)):
+[`tests/vector_db_api.rs`](tests/vector_db_api.rs)):
 
 ```rust,ignore
-use vdb::kv::{CollectionConfig, KvEngine, VectorMeta};
-use vdb::vector::{VectorFile, VectorFileWriter};
+use vdb::{Filter, Metric, VectorDb};
 
 let dir = tempfile::tempdir()?;
+let db = VectorDb::open(dir.path())?;
 
-// Metadata goes through KvEngine (LMDB).
-let engine = KvEngine::open(dir.path())?;
-engine.put_collection("docs", &CollectionConfig { dim: 3, metric: "cosine".into() })?;
+let docs = db.create_collection("docs", 3, Metric::Cosine)?;
 
-// Vector payloads go through a VectorFileWriter (plain buffered I/O).
-let vectors_path = dir.path().join("docs.vectors");
-let mut writer = VectorFileWriter::create(&vectors_path, 3)?;
-let offset = writer.append(&[0.1, 0.2, 0.3])?;
-writer.flush()?;
+docs.upsert_vector(&[1.0, 0.0, 0.0], serde_json::json!({ "tags": ["rust"] }))?;
+docs.upsert_vector(&[0.0, 1.0, 0.0], serde_json::json!({ "tags": ["python"] }))?;
 
-// Record where it landed.
-engine.put_vector_meta(1, &VectorMeta { collection: "docs".into(), offset, dim: 3 })?;
-
-// Read it back: VectorMeta from LMDB, the vector itself from a mmap'd VectorFile.
-let meta = engine.get_vector_meta(1)?.unwrap();
-let vf = VectorFile::open(&vectors_path)?;
-let vector = vf.read_at(meta.offset)?;
-assert_eq!(vector, &[0.1, 0.2, 0.3]);
+let results = docs
+    .query(&[1.0, 0.0, 0.0], 10)
+    .filter(Filter { field: "tags".into(), contains: "rust".into() })
+    .execute()?;
 ```
+
+The lower-level primitives (`KvEngine`, `VectorFile`/`VectorFileWriter`
+directly) are still there and usable too — see
+[`tests/basic_round_trip.rs`](tests/basic_round_trip.rs) — but the API
+above is what you actually want.
 
 ## 🚩 Feature flags
 
@@ -159,6 +162,7 @@ cargo check -p vdb --no-default-features --features serde-query
 cargo check -p vdb --no-default-features --features storage,index-hnsw
 cargo check -p vdb --no-default-features --features storage,index-hnsw,metrics
 cargo check -p vdb --no-default-features --features storage,serde-query
+cargo check -p vdb --no-default-features --features storage,metrics,serde-query
 ```
 
 Both `storage`'s `serde`/`serde_json` and `byteorder` dependencies were
@@ -220,15 +224,24 @@ Or all at once:
 ## 🗺️ Roadmap
 
 ```text
-Phase 1 — Core architecture (KvEngine trait, LMDB layer, Cargo scaffolding)     ✅
+Phase 1 — Core architecture (KvEngine, LMDB layer, Cargo scaffolding)           ✅
 Phase 2 — Storage layout (collections/vectors/metadata/logs tables)            ✅
 Phase 3 — Vector file + mmap layer (.vectors file read/write)                  ✅
+Phase 5 — Collection/query API + filter DSL (VectorDb/Collection/QueryBuilder) ✅
 Phase 4 — HNSW index + mmap traversal (.index file)                            ⏳ next
-Phase 5 — Collection/query API + filter DSL
 Phase 6 — WAL / crash recovery replay
 Phase 7 — Examples + integration tests
 Phase 8 — Release hardening (MSRV, packaging, CI)
 ```
+
+Built out of the blueprint's original order on purpose: Phase 5 (the
+actual usable `VectorDb`/`Collection`/`QueryBuilder` API) landed before
+Phase 4 (real HNSW). Reasoning: the API can ship correctly today with
+brute-force linear-scan search using the `Metric` primitive that already
+existed — real ANN search slots in behind the same interface later
+without a redesign. Doing the API first also forced settling
+vector-ID allocation (now: engine-allocated, monotonic per collection)
+before Phase 4 added even more surface area depending on that scheme.
 
 ## 📄 License
 

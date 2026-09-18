@@ -163,6 +163,37 @@ impl VectorFileWriter {
         Ok(offset)
     }
 
+    /// Open an existing `.vectors` file for appending more vectors.
+    /// Reads the current header to recover `dim`/`count` and seeks to the
+    /// end so the next [`VectorFileWriter::append`] lands after the
+    /// existing data.
+    pub fn open_append(path: &Path) -> Result<Self> {
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)?;
+
+        let mut header = [0u8; HEADER_LEN];
+        file.seek(SeekFrom::Start(0))?;
+        std::io::Read::read_exact(&mut file, &mut header)?;
+        if &header[0..4] != MAGIC {
+            return Err(Error::BadMagic {
+                expected: MAGIC,
+                got: header[0..4].to_vec(),
+            });
+        }
+        let dim = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        let count = u64::from_le_bytes(header[8..16].try_into().unwrap());
+
+        file.seek(SeekFrom::End(0))?;
+
+        Ok(Self {
+            file: BufWriter::new(file),
+            dim,
+            count,
+        })
+    }
+
     /// Flush buffered writes and patch the header's `count` field.
     pub fn flush(&mut self) -> Result<()> {
         self.file.flush()?;
@@ -179,6 +210,26 @@ impl VectorFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn open_append_continues_writing_after_a_prior_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("docs.vectors");
+
+        let mut writer = VectorFileWriter::create(&path, 3).unwrap();
+        let off_a = writer.append(&[1.0, 2.0, 3.0]).unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+
+        let mut writer = VectorFileWriter::open_append(&path).unwrap();
+        let off_b = writer.append(&[4.0, 5.0, 6.0]).unwrap();
+        writer.flush().unwrap();
+
+        let vf = VectorFile::open(&path).unwrap();
+        assert_eq!(vf.count(), 2);
+        assert_eq!(vf.read_at(off_a).unwrap(), &[1.0, 2.0, 3.0]);
+        assert_eq!(vf.read_at(off_b).unwrap(), &[4.0, 5.0, 6.0]);
+    }
 
     #[test]
     fn write_then_read_round_trips_multiple_vectors() {

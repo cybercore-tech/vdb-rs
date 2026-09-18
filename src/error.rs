@@ -19,6 +19,15 @@ pub enum Error {
     #[error("collection not found: {0}")]
     CollectionNotFound(String),
 
+    /// Tried to create a collection whose name is already in use.
+    #[error("collection already exists: {0}")]
+    CollectionAlreadyExists(String),
+
+    /// A `CollectionConfig`'s stored metric string doesn't match any
+    /// variant `Metric` recognizes.
+    #[error("unknown metric: {0:?}")]
+    UnknownMetric(String),
+
     /// A vector's dimensionality did not match the collection's configured dimension.
     #[error("dimension mismatch: expected {expected}, got {got}")]
     DimensionMismatch {

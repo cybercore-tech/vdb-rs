@@ -21,6 +21,7 @@ fn write_a_vector_and_read_it_back_through_kv_engine_and_vector_file() {
             &CollectionConfig {
                 dim: 3,
                 metric: "cosine".into(),
+                next_id: 0,
             },
         )
         .unwrap();

@@ -26,6 +26,12 @@ pub struct CollectionConfig {
     pub dim: u32,
     /// Distance/similarity metric, stored as its lowercase name.
     pub metric: String,
+    /// Next vector ID to allocate in this collection — mutable allocation
+    /// state, not really "config", but kept in the same record so
+    /// [`KvEngine::allocate_vector_id`] can read-increment-write it
+    /// atomically within one LMDB transaction rather than needing a
+    /// second table.
+    pub next_id: u64,
 }
 
 #[cfg(feature = "metrics")]
@@ -141,6 +147,45 @@ impl KvEngine {
         Ok(())
     }
 
+    /// List every collection name, in key (lexicographic) order.
+    pub fn list_collections(&self) -> Result<Vec<String>> {
+        let rtxn = self.env.read_txn()?;
+        let names: Result<Vec<String>> = self
+            .collections
+            .iter(&rtxn)?
+            .map(|entry| Ok(entry?.0.to_string()))
+            .collect();
+        names
+    }
+
+    /// Remove a collection's stored config. Returns `true` if it existed.
+    ///
+    /// Does not touch the `vectors`/`metadata` entries belonging to it, or
+    /// its `.vectors` file — callers (`VectorDb::delete_collection`) are
+    /// responsible for that cleanup.
+    pub fn delete_collection(&self, name: &str) -> Result<bool> {
+        let mut wtxn = self.env.write_txn()?;
+        let existed = self.collections.delete(&mut wtxn, name)?;
+        wtxn.commit()?;
+        Ok(existed)
+    }
+
+    /// Atomically allocate the next vector ID for `collection` (read the
+    /// stored `next_id`, increment it, write it back, all in one LMDB
+    /// transaction) and return the allocated ID.
+    pub fn allocate_vector_id(&self, collection: &str) -> Result<u64> {
+        let mut wtxn = self.env.write_txn()?;
+        let mut config = self
+            .collections
+            .get(&wtxn, collection)?
+            .ok_or_else(|| crate::error::Error::CollectionNotFound(collection.to_string()))?;
+        let id = config.next_id;
+        config.next_id += 1;
+        self.collections.put(&mut wtxn, collection, &config)?;
+        wtxn.commit()?;
+        Ok(id)
+    }
+
     /// Fetch a vector's stored location/metadata by ID, if it exists.
     pub fn get_vector_meta(&self, id: u64) -> Result<Option<VectorMeta>> {
         let rtxn = self.env.read_txn()?;
@@ -163,6 +208,27 @@ impl KvEngine {
         Ok(existed)
     }
 
+    /// List every `(id, VectorMeta)` belonging to `collection`.
+    ///
+    /// Full scan of the `vectors` table, filtered client-side — the table
+    /// has no secondary index by collection yet. Fine for the current
+    /// brute-force query path; revisit if this becomes a bottleneck.
+    pub fn list_vector_metas(&self, collection: &str) -> Result<Vec<(u64, VectorMeta)>> {
+        let rtxn = self.env.read_txn()?;
+        let metas: Result<Vec<(u64, VectorMeta)>> = self
+            .vectors
+            .iter(&rtxn)?
+            .map(|entry| Ok(entry?))
+            .filter(|entry: &Result<(u64, VectorMeta)>| {
+                entry
+                    .as_ref()
+                    .map(|(_, m)| m.collection == collection)
+                    .unwrap_or(true)
+            })
+            .collect();
+        metas
+    }
+
     /// Fetch a vector's user-supplied metadata blob by ID, if it exists.
     pub fn get_metadata(&self, id: u64) -> Result<Option<serde_json::Value>> {
         let rtxn = self.env.read_txn()?;
@@ -175,6 +241,14 @@ impl KvEngine {
         self.metadata.put(&mut wtxn, &id, value)?;
         wtxn.commit()?;
         Ok(())
+    }
+
+    /// Remove a vector's user-supplied metadata blob. Returns `true` if it existed.
+    pub fn delete_metadata(&self, id: u64) -> Result<bool> {
+        let mut wtxn = self.env.write_txn()?;
+        let existed = self.metadata.delete(&mut wtxn, &id)?;
+        wtxn.commit()?;
+        Ok(existed)
     }
 
     /// Append one WAL entry, keyed by a caller-supplied monotonic sequence number.
@@ -218,6 +292,7 @@ mod tests {
         let config = CollectionConfig {
             dim: 768,
             metric: "cosine".into(),
+            next_id: 0,
         };
 
         engine.put_collection("docs", &config).unwrap();
@@ -231,14 +306,130 @@ mod tests {
         let config = CollectionConfig {
             dim: 3,
             metric: "euclidean".into(),
+            next_id: 0,
         };
         assert_eq!(config.metric(), Some(crate::metric::Metric::Euclidean));
 
         let unknown = CollectionConfig {
             dim: 3,
             metric: "manhattan".into(),
+            next_id: 0,
         };
         assert_eq!(unknown.metric(), None);
+    }
+
+    #[test]
+    fn list_collections_returns_every_created_collection_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+        engine
+            .put_collection(
+                "b",
+                &CollectionConfig {
+                    dim: 1,
+                    metric: "cosine".into(),
+                    next_id: 0,
+                },
+            )
+            .unwrap();
+        engine
+            .put_collection(
+                "a",
+                &CollectionConfig {
+                    dim: 1,
+                    metric: "cosine".into(),
+                    next_id: 0,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(engine.list_collections().unwrap(), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn delete_collection_reports_whether_it_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+        engine
+            .put_collection(
+                "docs",
+                &CollectionConfig {
+                    dim: 1,
+                    metric: "cosine".into(),
+                    next_id: 0,
+                },
+            )
+            .unwrap();
+
+        assert!(engine.delete_collection("docs").unwrap());
+        assert!(!engine.delete_collection("docs").unwrap());
+        assert!(engine.get_collection("docs").unwrap().is_none());
+    }
+
+    #[test]
+    fn allocate_vector_id_increments_monotonically() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+        engine
+            .put_collection(
+                "docs",
+                &CollectionConfig {
+                    dim: 1,
+                    metric: "cosine".into(),
+                    next_id: 0,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(engine.allocate_vector_id("docs").unwrap(), 0);
+        assert_eq!(engine.allocate_vector_id("docs").unwrap(), 1);
+        assert_eq!(engine.allocate_vector_id("docs").unwrap(), 2);
+    }
+
+    #[test]
+    fn allocate_vector_id_fails_for_an_unknown_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+
+        let err = engine.allocate_vector_id("nope").unwrap_err();
+
+        assert!(matches!(err, crate::error::Error::CollectionNotFound(name) if name == "nope"));
+    }
+
+    #[test]
+    fn list_vector_metas_only_returns_the_requested_collection() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+        let a = VectorMeta {
+            collection: "a".into(),
+            offset: 0,
+            dim: 1,
+        };
+        let b = VectorMeta {
+            collection: "b".into(),
+            offset: 0,
+            dim: 1,
+        };
+        engine.put_vector_meta(1, &a).unwrap();
+        engine.put_vector_meta(2, &b).unwrap();
+        engine.put_vector_meta(3, &a).unwrap();
+
+        let metas = engine.list_vector_metas("a").unwrap();
+
+        assert_eq!(metas, vec![(1, a.clone()), (3, a)]);
+    }
+
+    #[test]
+    fn delete_metadata_reports_whether_it_existed() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = KvEngine::open(dir.path()).unwrap();
+        engine
+            .put_metadata(1, &serde_json::json!({"a": 1}))
+            .unwrap();
+
+        assert!(engine.delete_metadata(1).unwrap());
+        assert!(!engine.delete_metadata(1).unwrap());
+        assert!(engine.get_metadata(1).unwrap().is_none());
     }
 
     #[test]

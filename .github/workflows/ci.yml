@@ -134,6 +134,7 @@ jobs:
             storage,index-hnsw \
             storage,index-hnsw,metrics \
             storage,serde-query \
+            storage,metrics,serde-query \
           ; do
             echo "===== --no-default-features --features $features ====="
             cargo check -p vdb --no-default-features --features "$features"
