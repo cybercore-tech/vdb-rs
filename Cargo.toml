@@ -14,7 +14,9 @@ default = ["storage", "index-hnsw", "metrics", "serde-query"]
 # LMDB (via heed) KV substrate + mmap'd .vectors files. See ADR-0001.
 # serde/serde_json are required here (not just by serde-query) because
 # heed's SerdeJson codec is what KvEngine uses to store collection configs.
-storage = ["dep:heed", "dep:memmap2", "dep:serde", "dep:serde_json"]
+# byteorder is required directly: heed's U64<Endian> key codec (used for
+# the vectors/metadata/logs tables) is not re-exported by heed itself.
+storage = ["dep:heed", "dep:memmap2", "dep:serde", "dep:serde_json", "dep:byteorder"]
 # mmap'd HNSW .index files. See ADR-0002. Requires storage's mmap plumbing.
 index-hnsw = ["storage"]
 # Distance/similarity metric implementations (cosine, euclidean, dot).
@@ -32,6 +34,7 @@ async = ["dep:tokio"]
 thiserror = "1"
 heed = { version = "0.22", features = ["serde-json"], optional = true }
 memmap2 = { version = "0.9", optional = true }
+byteorder = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 half = { version = "2", optional = true }
