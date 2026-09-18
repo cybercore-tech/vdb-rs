@@ -27,10 +27,7 @@ const ALIGN: usize = 32;
 const HEADER_LEN: usize = 32;
 
 fn aligned(len: usize) -> usize {
-    // Not `len.div_ceil(ALIGN)`: that's only stable since Rust 1.73, and
-    // this crate declares rust-version = "1.70" (unverified against an
-    // actual 1.70 toolchain — kept conservative rather than assumed).
-    (len + ALIGN - 1) / ALIGN * ALIGN
+    len.div_ceil(ALIGN) * ALIGN
 }
 
 /// A read-only, mmap'd `.vectors` file for one collection.

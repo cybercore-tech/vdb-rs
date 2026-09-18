@@ -3,7 +3,7 @@
 `Rust` · `LMDB` · `mmap` · `HNSW` · embedded
 
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#-license)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](#-msrv)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](#-msrv)
 
 **An embedded, crash-safe, Rust-native vector database — no server, no
 Python bindings, just a library you link into your own binary.**
@@ -177,14 +177,26 @@ vdb = { git = "https://github.com/darkstardevx/vdb-rs" }
 
 ## 🎯 MSRV
 
-`1.70`, declared in `Cargo.toml` — **not yet verified against a real 1.70
-toolchain** (only checked via `clippy::incompatible_msrv`, which is
-static analysis, not an actual build). Before relying on this for a real
-project, verify it for real:
+`1.88`, declared in `Cargo.toml` — **actually verified**, not just
+asserted: `cargo +1.88.0 check`/`test` (real, pinned toolchain, not
+`clippy::incompatible_msrv`'s static analysis) both pass.
+
+Originally declared `1.70` with edition `2021` at Phase 1, based on the
+blueprint's own placeholder ("targeting 1.70+"), never built against a
+real toolchain. A `cargo +1.70.0 check` turned up two real problems
+static analysis alone wouldn't catch: a proc-macro dependency (`quote`)
+needing 1.71+, and — more fundamentally — a transitive dependency
+(`tempfile` → `getrandom`) whose own `Cargo.toml` declares `edition =
+"2024"`, which a pre-2024-edition `cargo` can't even parse. `1.70` was
+never achievable with this dependency tree; `1.88` (matching the
+`darkstardevx/gateflow` precedent, which hit the same
+`unsigned_is_multiple_of`-class stabilization issue) is the first
+verified-working pin. Re-verify before trusting this:
 
 ```bash
-rustup toolchain install 1.70.0
-cargo +1.70.0 check --all-features
+rustup toolchain install 1.88.0
+cargo +1.88.0 check --workspace --all-targets --all-features
+cargo +1.88.0 test --workspace --all-features --lib --tests
 ```
 
 ## 🧪 Development
