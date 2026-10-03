@@ -30,6 +30,9 @@ jobs:
         run: |
           GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
           "$RUNNER_TEMP/actionlint-bin/actionlint"
+      - name: Check local semantic-search preparation helpers
+        run: python3 -m unittest discover -s scripts/tests
+
       - name: Validate shell syntax
         run: bash -n scripts/*.sh scripts/release-gates
 
@@ -143,6 +146,9 @@ jobs:
       - name: Feature isolation
         run: ./scripts/validate-features.sh
 
+      - name: Test semantic search with frozen real embeddings (offline)
+        run: cargo test --locked --all-features --example semantic_search
+
       - name: Run public API example
         run: cargo run --locked --example basic
 
@@ -212,6 +218,9 @@ jobs:
           --all-features
           --lib
           --tests
+
+      - name: Test semantic search on MSRV (offline)
+        run: cargo test --locked --all-features --example semantic_search
 
       - name: Test rustdoc examples on MSRV
         env:

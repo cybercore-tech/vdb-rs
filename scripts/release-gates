@@ -14,8 +14,11 @@ case "$mode" in
     ./scripts/validate.sh
     ./scripts/validate-features.sh
     cargo run --locked --example basic
+    python3 -m unittest discover -s scripts/tests
+    cargo test --locked --all-features --example semantic_search
     cargo +1.88.0 check --locked --workspace --all-targets --all-features
     cargo +1.88.0 test --locked --workspace --all-features --lib --tests
+    cargo +1.88.0 test --locked --all-features --example semantic_search
     cargo +1.88.0 test --locked --workspace --all-features --doc
     RUSTDOCFLAGS='-D warnings' cargo +1.88.0 doc --locked --workspace --all-features --no-deps
     if [[ "$mode" == release ]]; then

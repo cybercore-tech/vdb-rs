@@ -116,6 +116,13 @@ reopen latency, a full rebuild comparison, file sizes and Linux peak RSS.
 See [measured results](docs/benchmarks.md). Small synthetic results do not establish
 production-scale capacity or throughput.
 
+## Local-note semantic search
+
+A [working evaluation and search example](docs/semantic-search.md) uses local
+technical notes, real CPU embeddings, source/snippet metadata and a BM25 keyword
+baseline. It verifies batch ingestion, incremental indexing, whole-note deletion,
+reindexing and reopening. Private notes stay local; CI uses frozen public embeddings.
+
 ## Development and release
 
 ```bash

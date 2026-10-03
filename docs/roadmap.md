@@ -5,7 +5,8 @@ exclusive directory locking, transactional recovery payloads and redo markers,
 idempotent file rebuild/checkpoint, mmap HNSW traversal, exact filtered search,
 compaction, finite-vector/name/file validation, process-kill regressions, examples,
 atomic batch ingestion, incremental HNSW insertion with deleted routing nodes,
-mixed query/write benchmarks, recall benchmark, CI/MSRV/package/security/release tooling and format documentation.
+mixed query/write benchmarks, real local-note semantic evaluation with a keyword
+baseline and offline embedding regression fixture, recall benchmark, CI/MSRV/package/security/release tooling and format documentation.
 
 Next priorities:
 

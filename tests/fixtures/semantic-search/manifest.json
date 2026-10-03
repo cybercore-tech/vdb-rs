@@ -1,0 +1,50 @@
+{
+  "model": "BAAI/bge-small-en-v1.5",
+  "fastembed": "0.8.1",
+  "dimensions": 384,
+  "documents": 8,
+  "chunks": 8,
+  "chunk_tokens": 320,
+  "overlap_tokens": 48,
+  "document_embedding_seconds": 0.18315727304434404,
+  "files": [
+    {
+      "source": "fixture/batching.md",
+      "sha256": "6d56481b7b4ca24ff7a6e4bc6722618225db12c2a057cd806c261c3864b4e3cb"
+    },
+    {
+      "source": "fixture/filtering.md",
+      "sha256": "29dd659091390e4c0e1620d8b5dc029c3307e7184b51a8e8070d61f9d069eb2f"
+    },
+    {
+      "source": "fixture/hnsw.md",
+      "sha256": "90c490a751cfc21aa01ee49c48eda3c7ae4dc0774fdc6653b5ddcc9403ea46be"
+    },
+    {
+      "source": "fixture/identity.md",
+      "sha256": "31a061aa8a37f4d83d17b5ebe2a5257e382033bbc340689c0c9de40f35edc1fa"
+    },
+    {
+      "source": "fixture/platform.md",
+      "sha256": "104c0341820abc6e0b2a27975b02c23b6d66a76492fc29c6185b3bbc1366b129"
+    },
+    {
+      "source": "fixture/recovery.md",
+      "sha256": "366bc397e142b040cf178c7708ca76e99faf5a40f62df8c6050c19d548883ad2"
+    },
+    {
+      "source": "fixture/release.md",
+      "sha256": "b6f7622deca3034a71850d6b934b6e06e1a6510657b29e5eab88b73182443d9d"
+    },
+    {
+      "source": "fixture/storage.md",
+      "sha256": "77c201d2c33580b7fdb019911dded8233573bc16ede2c4b8e2d22170b504cd26"
+    }
+  ],
+  "model_artifacts": [
+    {
+      "file": "models--Qdrant--bge-small-en-v1.5-onnx-Q/snapshots/aa8f8b060edb00e03bfdd08813a2949946c8ba55/model_optimized.onnx",
+      "sha256": "51f1bd0addd6e859e42c2c8021a5e5461385bb676a649f4b269aa445449f2431"
+    }
+  ]
+}

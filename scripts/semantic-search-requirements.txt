@@ -1,0 +1,2 @@
+# Local CPU embeddings; never used by the Rust library or network-free CI fixture.
+fastembed==0.8.1

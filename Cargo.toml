@@ -52,3 +52,7 @@ required-features = ["storage", "metrics", "serde-query"]
 [[example]]
 name = "benchmark"
 required-features = ["storage", "metrics", "serde-query", "index-hnsw"]
+
+[[example]]
+name = "semantic_search"
+required-features = ["storage", "metrics", "serde-query", "index-hnsw"]

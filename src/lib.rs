@@ -1,6 +1,7 @@
 //! Embedded vector search with transactional LMDB recovery and mmap HNSW graphs.
 //!
-//! The alpha serializes public operations and rebuilds indexes after mutations.
+//! The alpha serializes public operations, supports atomic batches, and refreshes
+//! HNSW incrementally after clean mutations.
 //! See the repository README for durability assumptions and format compatibility.
 //!
 //! ```
