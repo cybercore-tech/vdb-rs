@@ -141,6 +141,19 @@ Embed another question against the cached model and reuse the persisted database
 just semantic-search dist/my-notes/db dist/my-notes/search-queries.jsonl
 ```
 
+`just semantic-search` prints readable titles, sources, distances and snippets.
+Use `just semantic-search-json` when you want JSON for another program.
+
+Read a saved evaluation report and write a Markdown copy beside it:
+
+```sh
+just semantic-report dist/my-notes/report.json
+```
+
+Search does not create an evaluation report; the `evaluate` command above writes
+it through the explicit output redirection. Local reports live under the selected
+output directory and are ignored by git.
+
 Queries-only mode preserves the original evaluation questions and writes
 search-queries.jsonl. The CLI verifies the stored model name against the query
 model; callers must also keep model artifact version and preprocessing consistent.
