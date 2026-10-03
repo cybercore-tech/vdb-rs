@@ -4,13 +4,15 @@ Implemented: collection isolation/lifecycle, serialized writes and snapshots,
 exclusive directory locking, transactional recovery payloads and redo markers,
 idempotent file rebuild/checkpoint, mmap HNSW traversal, exact filtered search,
 compaction, finite-vector/name/file validation, process-kill regressions, examples,
-recall benchmark, CI/MSRV/package/security/release tooling and format documentation.
+atomic batch ingestion, incremental HNSW insertion with deleted routing nodes,
+mixed query/write benchmarks, recall benchmark, CI/MSRV/package/security/release tooling and format documentation.
 
 Next priorities:
 
-1. Batch ingestion and incremental HNSW maintenance, with large real embedding
-   datasets and mixed query/write benchmarks. Current synchronous ingestion and
-   lazy full graph rebuild are the principal performance limits.
+1. Validate batches and incremental HNSW on large real embedding datasets.
+   Refresh still scans locations, hydrates all graph vectors and writes a full
+   snapshot; measure a mutable overlay/append journal and bounded checkpoints.
+   Establish workload-based compaction thresholds for retained deleted nodes.
 2. Collection-scoped location iteration and bounded top-k exact selection;
    shared-table scans and full sorting still affect exact/filtered queries.
 3. Explicit update-by-ID and retry/idempotency semantics, richer filter expressions,

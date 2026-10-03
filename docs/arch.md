@@ -24,9 +24,26 @@ from the mmap and vectors from the vector mmap. There is no exact fallback for
 unfiltered ANN queries; `.exact()` explicitly selects the baseline.
 
 Filtered queries use exact search because post-filtering ANN candidates can miss
-qualifying neighbors. Inserts/deletions invalidate the cached graph; a persisted
-old graph is rejected by revision. Compaction increments revision because offsets
-change even if the logical set of IDs does not.
+qualifying neighbors. Clean inserts/deletions retain the cached and persisted
+snapshot. At the next ANN query, an earlier revision of the same generation and
+dimension seeds a mutable graph by copying nodes, vectors and links. Existing
+live IDs must have matching offsets. Only missing IDs undergo HNSW insertion;
+deleted nodes retain routing links. The refreshed graph is atomically published
+at the current revision. Opening a corrupt/incompatible graph or recovery instead
+builds from live vectors. Compaction discards snapshots before changing offsets.
+
+A cached live-ID set reconstructed from LMDB excludes deleted nodes from results.
+The layer-zero beam is widened by the number of deleted nodes before filtering,
+so deletion cannot simply consume the requested result slots. Heavy deletion
+increases search cost; compaction reclaims the graph and vector file. Refresh is
+incremental construction, but still O(graph size) in hydration/snapshot I/O and
+uses temporary vector copies. An append journal or mutable overlay is deferred.
+
+Single insertion and batch insertion share the same implementation. A batch
+validates all rows, allocates consecutive IDs in one logical transaction, advances
+revision once, appends all blocks, syncs once and checkpoints once. Transaction
+failure rolls back every row and ID allocation; post-commit I/O failure retains
+the entire logical batch for recovery. Empty batches have no mutation.
 
 Constraints: local little-endian hosts, local POSIX filesystems, serialized API
 operations, fixed configured LMDB capacity, no external modification. Low-level

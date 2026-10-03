@@ -146,9 +146,9 @@ jobs:
       - name: Run public API example
         run: cargo run --locked --example basic
 
-      - name: Benchmark smoke test
+      - name: Batch ingestion and incremental HNSW benchmark smoke test
         if: runner.os == 'Linux'
-        run: cargo run --locked --release --example benchmark -- 128 16 5
+        run: cargo run --locked --release --example benchmark -- 128 16 5 32
 
   package:
     name: Package readiness

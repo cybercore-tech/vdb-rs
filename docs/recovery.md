@@ -5,20 +5,20 @@ instruction in `pending`, rather than an independent append-only application log
 Full committed vector payloads are retained in `payloads`. Recovery instructions
 are keyed by collection and coalesce into `Rebuild` or `Remove`.
 
-## Insert
+## Single or batch insert
 
 1. Acquire the shared operation mutex and finish any pending recovery.
-2. Validate the collection incarnation, dimension and finite vector values.
+2. Validate the collection incarnation, dimension and finite values for every input vector. Empty batches return without mutation.
 3. Open the clean append file and compute its next aligned offset.
-4. In one LMDB transaction, allocate a globally unique ID, increment collection
-   revision, write location, metadata and payload, and set `pending[name]=Rebuild`.
-5. Append the vector and checksum, patch the header count/checksum, and fsync.
+4. In one LMDB transaction, allocate consecutive globally unique IDs in input order, increment
+   collection revision once, write every location, metadata and payload, and set `pending[name]=Rebuild`.
+5. Append every vector and checksum, patch the header count/checksum, and fsync.
 6. Delete the pending marker in another durable LMDB transaction.
-7. Return the ID.
+7. Return the IDs.
 
-A crash before step 4 commits leaves no new logical vector. A crash after step 4
+A crash before step 4 commits leaves no new logical vectors (including transaction errors partway through a batch). A crash after step 4
 may commit an operation whose caller never received success. Recovery preserves
-that vector. This is at-least-once outcome uncertainty, not a claim of exactly-once
+the entire batch, including rows not yet appended to the file. This is at-least-once outcome uncertainty, not a claim of exactly-once
 client retry semantics. An error after the logical commit has the same uncertainty.
 
 ## Recovery and compaction
@@ -39,13 +39,16 @@ file work, using this same protocol.
 Creation commits a fresh generation, configuration and `Rebuild` marker. Recovery
 materializes the empty file before any handle is returned. Deleting a vector removes
 location, metadata and payload and increments revision in one transaction. It does
-not need a file marker because the orphaned append block is never referenced again.
+not need a file marker because the orphaned append block is not a live record. HNSW may still traverse it as a
+routing node, using a live-ID set to exclude it from query results. Compaction
+removes such nodes.
 Collection deletion atomically removes all of its logical records and sets `Remove`.
 Recovery removes derived files, fsyncs the directory, then checkpoints the marker.
 The database-wide ID allocator is never reset, including after delete/recreate.
 
 Process-kill tests stop workers with pending creation, torn vector-file insertion,
-fully synced insertion, deletion and partial compaction. Each database is reopened
+fully synced insertion, a committed batch before append or with only its first row
+synced, deletion and partial compaction. Each database is reopened
 twice to verify durable outcomes, coherent metadata and idempotent replay. These
 checks cover process termination; they do not emulate controller caches or power
 failure. Durability relies on LMDB defaults and the filesystem's fsync/rename contract.

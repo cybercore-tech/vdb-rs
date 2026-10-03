@@ -24,8 +24,8 @@ validate:
 example:
     cargo run --locked --example basic
 
-benchmark n="1000" dim="32" queries="50":
-    cargo run --locked --release --example benchmark -- {{n}} {{dim}} {{queries}}
+benchmark n="1000" dim="32" queries="50" batch_size="128":
+    cargo run --locked --release --example benchmark -- {{n}} {{dim}} {{queries}} {{batch_size}}
 
 release-gates mode="full":
     ./scripts/release-gates {{mode}}

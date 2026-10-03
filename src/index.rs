@@ -44,6 +44,8 @@ pub struct IndexFile {
     revision: u64,
     entry: usize,
     max_level: usize,
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    live: Option<std::collections::HashSet<u64>>,
 }
 impl IndexFile {
     /// Open and validate every node, layer, edge and file boundary.
@@ -155,6 +157,8 @@ impl IndexFile {
             revision,
             entry,
             max_level,
+            #[cfg(all(feature = "metrics", feature = "serde-query"))]
+            live: None,
         };
         if count > 0 && levels[entry] != max_level {
             return Err(invalid("entry level"));
@@ -364,6 +368,58 @@ mod graph {
             }
             Ok(graph)
         }
+        pub(crate) fn restore(
+            index: &IndexFile,
+            vectors: &VectorFile,
+            metas: &[(u64, crate::kv::VectorMeta)],
+        ) -> Result<Self> {
+            let mut nodes = Vec::with_capacity(index.len());
+            let mut offsets = std::collections::HashMap::new();
+            for i in 0..index.len() {
+                let offset = index.vector_offset(i);
+                let level = u32_at(&index.mmap, index.offsets[i] + 16)? as usize;
+                offsets.insert(index.id(i), offset);
+                nodes.push(Node {
+                    id: index.id(i),
+                    offset,
+                    vector: vectors.read_at(offset)?.to_vec(),
+                    links: (0..=level).map(|layer| index.neighbors(i, layer)).collect(),
+                });
+            }
+            for (id, meta) in metas {
+                if offsets.get(id).is_some_and(|offset| *offset != meta.offset) {
+                    return Err(invalid("snapshot vector location changed"));
+                }
+            }
+            Ok(Self {
+                nodes,
+                entry: index.entry,
+                max_level: index.max_level,
+                m: index.m as usize,
+                ef: index.ef_construction as usize,
+            })
+        }
+
+        pub(crate) fn extend(
+            &mut self,
+            metas: &[(u64, crate::kv::VectorMeta)],
+            vectors: &VectorFile,
+            metric: Metric,
+        ) -> Result<()> {
+            let known: HashSet<_> = self.nodes.iter().map(|node| node.id).collect();
+            for (id, meta) in metas {
+                if !known.contains(id) {
+                    self.insert(
+                        *id,
+                        meta.offset,
+                        vectors.read_at(meta.offset)?.to_vec(),
+                        metric,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
         fn select(
             &self,
             query: &[f32],
@@ -521,6 +577,9 @@ mod graph {
         }
     }
     impl IndexFile {
+        pub(crate) fn set_live(&mut self, live: HashSet<u64>) {
+            self.live = Some(live);
+        }
         pub(crate) fn search(
             &self,
             vectors: &VectorFile,
@@ -550,7 +609,14 @@ mod graph {
             }
             let candidates = layer_search(
                 &[entry],
-                ef.max(k).min(self.len()),
+                // Deleted nodes can occupy beam slots but remain useful routes.
+                // Widen by their count before excluding them from results.
+                ef.max(k)
+                    .saturating_add(
+                        self.len()
+                            .saturating_sub(self.live.as_ref().map_or(self.len(), HashSet::len)),
+                    )
+                    .min(self.len()),
                 0,
                 |i| {
                     Ok(distance(
@@ -563,6 +629,11 @@ mod graph {
             )?;
             candidates
                 .into_iter()
+                .filter(|i| {
+                    self.live
+                        .as_ref()
+                        .is_none_or(|live| live.contains(&self.id(*i)))
+                })
                 .take(k)
                 .map(|i| {
                     Ok((

@@ -241,9 +241,48 @@ impl Collection {
     /// If file I/O subsequently fails, the operation may have committed; reopening
     /// or the next operation repairs its derived files. Do not blindly retry.
     pub fn upsert_vector(&self, vector: &[f32], metadata: serde_json::Value) -> Result<u64> {
-        let mut state = self.shared.lock()?;
+        Ok(self.insert_rows(&[(vector, &metadata)])?[0])
+    }
+
+    /// Insert a batch atomically, returning database-wide IDs in input order.
+    /// All vectors are validated before mutation. An empty batch is a no-op.
+    /// One LMDB transaction commits all rows, followed by one vector-file sync
+    /// and checkpoint. Size batches to fit the configured LMDB map and memory.
+    /// After a post-commit I/O error, the entire batch may already be committed;
+    /// the next operation or reopening repairs it. Do not blindly retry.
+    ///
+    /// ```
+    /// use vdb::{Metric, VectorDb};
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let directory = tempfile::tempdir()?;
+    /// let db = VectorDb::open(directory.path())?;
+    /// let docs = db.create_collection("docs", 2, Metric::Euclidean)?;
+    /// let ids = docs.upsert_batch(&[
+    ///     (vec![3.0, 4.0], serde_json::json!({"title": "first"})),
+    ///     (vec![0.0, 0.0], serde_json::json!({"title": "second"})),
+    /// ])?;
+    /// assert_eq!(ids.len(), 2);
+    /// assert_eq!(docs.query(&[0.0, 0.0], 1).execute()?[0].id, ids[1]);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn upsert_batch(&self, rows: &[(Vec<f32>, serde_json::Value)]) -> Result<Vec<u64>> {
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|(vector, metadata)| (vector.as_slice(), metadata))
+            .collect();
+        self.insert_rows(&rows)
+    }
+
+    fn insert_rows(&self, rows: &[(&[f32], &serde_json::Value)]) -> Result<Vec<u64>> {
+        let _state = self.shared.lock()?;
         let config = self.checked_config()?;
-        validate_vector(vector, config.dim)?;
+        for (vector, _) in rows {
+            validate_vector(vector, config.dim)?;
+        }
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
         let path = self.shared.vectors_path(&self.name);
         let mut writer = VectorFileWriter::open_append(&path)?;
         if writer.dim() != config.dim {
@@ -251,34 +290,24 @@ impl Collection {
                 "collection/vector-file dimension mismatch".into(),
             ));
         }
-        let offset = writer.next_offset();
-        let id = self
+        let ids = self
             .shared
             .engine
-            .insert(&self.name, vector, &metadata, offset)?;
-        #[cfg(feature = "index-hnsw")]
-        state.indexes.remove(&self.name);
-        #[cfg(not(feature = "index-hnsw"))]
-        let _ = &mut state;
-        writer.append(vector)?;
+            .insert_batch(&self.name, rows, writer.next_offset())?;
+        for (vector, _) in rows {
+            writer.append(vector)?;
+        }
         writer.flush()?;
         self.shared.engine.checkpoint(&self.name, &[])?;
-        Ok(id)
+        Ok(ids)
     }
 
     /// Delete a vector belonging to this collection; foreign IDs return false.
     /// Space is reclaimed by `compact` or an interrupted-write rebuild.
     pub fn delete_vector(&self, id: u64) -> Result<bool> {
-        let mut state = self.shared.lock()?;
+        let _state = self.shared.lock()?;
         self.checked_config()?;
-        let existed = self.shared.engine.remove_vector(&self.name, id)?;
-        #[cfg(feature = "index-hnsw")]
-        if existed {
-            state.indexes.remove(&self.name);
-        }
-        #[cfg(not(feature = "index-hnsw"))]
-        let _ = &mut state;
-        Ok(existed)
+        self.shared.engine.remove_vector(&self.name, id)
     }
 
     /// Reclaim deleted vector space using the durable rebuild protocol.
@@ -423,23 +452,52 @@ impl QueryBuilder<'_> {
             .is_some_and(|idx| idx.matches(config.generation, config.revision, config.dim))
         {
             let path = shared.base_path.join(format!("{name}.index"));
-            let existing = crate::index::IndexFile::open(&path)
-                .ok()
-                .filter(|idx| idx.matches(config.generation, config.revision, config.dim));
-            let index = if let Some(index) = existing {
-                index
-            } else {
-                let mut vectors = Vec::new();
-                for (id, meta) in shared.engine.list_vector_metas(name)? {
-                    vectors.push((id, meta.offset, vf.read_at(meta.offset)?.to_vec()));
+            let existing = state
+                .indexes
+                .remove(name)
+                .or_else(|| crate::index::IndexFile::open(&path).ok())
+                .filter(|idx| {
+                    idx.generation() == config.generation
+                        && idx.revision() <= config.revision
+                        && idx.dim() == config.dim
+                });
+            let metas = shared.engine.list_vector_metas(name)?;
+            for (_, meta) in &metas {
+                if meta.dim != config.dim {
+                    return Err(Error::Corrupt(
+                        "collection/vector dimension mismatch".into(),
+                    ));
                 }
-                let graph = crate::index::Hnsw::build(vectors, metric)?;
+            }
+            let mut index = if existing
+                .as_ref()
+                .is_some_and(|idx| idx.revision() == config.revision)
+            {
+                existing.unwrap()
+            } else {
+                // A previous revision retains its topology, including deleted
+                // routing nodes. Only new IDs undergo HNSW construction.
+                let mut graph = existing
+                    .as_ref()
+                    .and_then(|idx| crate::index::Hnsw::restore(idx, &vf, &metas).ok());
+                if let Some(graph) = graph.as_mut() {
+                    graph.extend(&metas, &vf, metric)?;
+                } else {
+                    let mut vectors = Vec::new();
+                    for (id, meta) in &metas {
+                        vectors.push((*id, meta.offset, vf.read_at(meta.offset)?.to_vec()));
+                    }
+                    graph = Some(crate::index::Hnsw::build(vectors, metric)?);
+                }
                 let temporary = shared.base_path.join(format!("{name}.index.tmp"));
-                graph.write(&temporary, config.dim, config.generation, config.revision)?;
+                graph
+                    .unwrap()
+                    .write(&temporary, config.dim, config.generation, config.revision)?;
                 std::fs::rename(&temporary, &path)?;
                 sync_directory(&shared.base_path)?;
                 crate::index::IndexFile::open(&path)?
             };
+            index.set_live(metas.iter().map(|(id, _)| *id).collect());
             state.indexes.insert(name.clone(), index);
         }
         state.indexes[name]
@@ -662,6 +720,26 @@ mod recovery_tests {
                 let tmp = db.shared.base_path.join("docs.vectors.tmp");
                 std::fs::write(tmp, b"partial snapshot").unwrap();
             }
+            "batch" | "batch_file" => {
+                let mut writer =
+                    VectorFileWriter::open_append(&db.shared.vectors_path("docs")).unwrap();
+                db.shared
+                    .engine
+                    .insert_batch(
+                        "docs",
+                        &[
+                            (&[3., 4.], &json!({"recovered":true})),
+                            (&[6., 8.], &json!({"recovered":true})),
+                        ],
+                        writer.next_offset(),
+                    )
+                    .unwrap();
+                if stage == "batch_file" {
+                    // Durable prefix of a committed two-row batch, no checkpoint.
+                    writer.append(&[3., 4.]).unwrap();
+                    writer.flush().unwrap();
+                }
+            }
             "insert" | "file" => {
                 let c = db.collection("docs").unwrap();
                 let mut writer =
@@ -694,7 +772,16 @@ mod recovery_tests {
 
     #[test]
     fn killed_process_replays_committed_changes_idempotently() {
-        for stage in ["create", "insert", "file", "delete", "rebuild", "locked"] {
+        for stage in [
+            "create",
+            "insert",
+            "file",
+            "batch",
+            "batch_file",
+            "delete",
+            "rebuild",
+            "locked",
+        ] {
             let dir = tempfile::tempdir().unwrap();
             {
                 let db = VectorDb::open(dir.path()).unwrap();
@@ -736,16 +823,23 @@ mod recovery_tests {
                     let results = c.query(&[0., 0.], 10).execute().unwrap();
                     assert_eq!(
                         results.len(),
-                        if stage == "insert" || stage == "file" {
+                        if stage == "batch" || stage == "batch_file" {
+                            3
+                        } else if stage == "insert" || stage == "file" {
                             2
                         } else {
                             1
                         },
                         "stage={stage}"
                     );
-                    if results.len() == 2 {
+                    if results.len() >= 2 {
                         assert_eq!(results[1].score, 5.);
                         assert_eq!(results[1].metadata.as_ref().unwrap()["recovered"], true);
+                    }
+                    if results.len() == 3 {
+                        assert_eq!(results[2].score, 10.);
+                        assert_eq!(results[2].metadata.as_ref().unwrap()["recovered"], true);
+                        assert_eq!(c.config().unwrap().next_id, 3);
                     }
                     if stage == "create" {
                         assert!(

@@ -46,3 +46,10 @@ neighbor positions. Node offsets are contiguous, edges must target valid nodes
 present at that level, IDs and adjacency entries must be unique, and degrees
 are bounded by M (2M on layer zero). Checksums and boundaries are verified before
 traversal. The index is rebuildable; it is never the authority for committed data.
+
+Snapshots may contain deleted IDs: these nodes retain routing edges until
+compaction. Live membership is reconstructed from LMDB when loading/refreshing a
+snapshot, never inferred from node presence. A snapshot at an earlier revision
+of the same generation/dimension can seed incremental insertion when offsets
+still match; pending recovery and compaction discard snapshots before relocating
+vectors. No on-disk format change is needed for batch or incremental maintenance.

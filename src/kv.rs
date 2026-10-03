@@ -369,6 +369,7 @@ impl KvEngine {
     }
 
     #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    #[cfg(test)]
     pub(crate) fn insert(
         &self,
         collection: &str,
@@ -376,14 +377,24 @@ impl KvEngine {
         metadata: &serde_json::Value,
         offset: u64,
     ) -> Result<u64> {
+        Ok(self.insert_batch(collection, &[(vector, metadata)], offset)?[0])
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn insert_batch(
+        &self,
+        collection: &str,
+        rows: &[(&[f32], &serde_json::Value)],
+        offset: u64,
+    ) -> Result<Vec<u64>> {
         let mut txn = self.env.write_txn()?;
         let mut config = self
             .collections
             .get(&txn, collection)?
             .ok_or_else(|| Error::CollectionNotFound(collection.into()))?;
-        let id = self.state.get(&txn, "next_id")?.unwrap_or(0);
-        let next = id
-            .checked_add(1)
+        let first = self.state.get(&txn, "next_id")?.unwrap_or(0);
+        let next = first
+            .checked_add(rows.len() as u64)
             .ok_or_else(|| Error::Corrupt("ID space exhausted".into()))?;
         config.next_id = next;
         config.revision = config
@@ -392,20 +403,30 @@ impl KvEngine {
             .ok_or_else(|| Error::Corrupt("revision exhausted".into()))?;
         self.state.put(&mut txn, "next_id", &next)?;
         self.collections.put(&mut txn, collection, &config)?;
-        self.vectors.put(
-            &mut txn,
-            &id,
-            &VectorMeta {
-                collection: collection.into(),
-                offset,
-                dim: config.dim,
-            },
-        )?;
-        self.metadata.put(&mut txn, &id, metadata)?;
-        self.payloads.put(&mut txn, &id, &vector.to_vec())?;
+        let stride = crate::vector::block_len(config.dim) as u64;
+        let mut ids = Vec::with_capacity(rows.len());
+        for (i, (vector, metadata)) in rows.iter().enumerate() {
+            let id = first + i as u64;
+            let offset = (i as u64)
+                .checked_mul(stride)
+                .and_then(|n| offset.checked_add(n))
+                .ok_or_else(|| Error::Corrupt("vector offset exhausted".into()))?;
+            self.vectors.put(
+                &mut txn,
+                &id,
+                &VectorMeta {
+                    collection: collection.into(),
+                    offset,
+                    dim: config.dim,
+                },
+            )?;
+            self.metadata.put(&mut txn, &id, metadata)?;
+            self.payloads.put(&mut txn, &id, &vector.to_vec())?;
+            ids.push(id);
+        }
         self.pending.put(&mut txn, collection, &Recovery::Rebuild)?;
         txn.commit()?;
-        Ok(id)
+        Ok(ids)
     }
 
     #[cfg(all(feature = "metrics", feature = "serde-query"))]

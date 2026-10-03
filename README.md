@@ -31,6 +31,21 @@ Ok(())
 }
 ```
 
+```rust
+use vdb::{Metric, VectorDb};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let temporary = tempfile::tempdir()?;
+let db = VectorDb::open(temporary.path())?;
+let docs = db.create_collection("docs", 3, Metric::Cosine)?;
+let ids = docs.upsert_batch(&[
+    (vec![1.0, 0.0, 0.0], serde_json::json!({"title": "first"})),
+    (vec![0.0, 1.0, 0.0], serde_json::json!({"title": "second"})),
+])?;
+assert_eq!(ids.len(), 2);
+Ok(())
+}
+```
+
 Run `cargo run --example basic` for insertion, metadata filtering and a real
 close/reopen. The library-level rustdoc example is tested too.
 
@@ -41,10 +56,13 @@ close/reopen. The library-level rustdoc example is tested too.
 - Deletion checks ownership and collection deletion removes all associated records.
 - A directory lock excludes other engines/processes. Cloned database and collection
   handles share a mutex; reads and writes have coherent, serialized snapshots.
-- Inserts atomically commit vector payload, location, metadata, ID allocation,
+- Single inserts and `upsert_batch` atomically commit vector payloads, locations, metadata, ID allocation,
   collection revision and a recovery marker to LMDB. The vector file is then
   synchronized and the marker checkpointed. Reopening replays pending work.
-- Interrupted creation, insertion, compaction and collection deletion are recoverable.
+- A batch returns IDs in input order, validates every row before mutation, and uses
+  one logical transaction, one vector-file sync and one checkpoint. Empty batches
+  are no-ops. LMDB capacity errors roll back the entire batch.
+- Interrupted creation, single/batch insertion, compaction and collection deletion are recoverable.
   Process-kill tests cover the boundary before and after vector file synchronization.
 - Vectors are finite `f32`s with dimension 1–65,536. Names are ASCII letters/digits,
   `_` and `-`, starting with a letter or digit (maximum 128 bytes).
@@ -61,10 +79,14 @@ close/reopen. The library-level rustdoc example is tested too.
 - `upsert_vector` is a legacy name: it **always inserts** a new vector. Updating an
   existing ID is not implemented.
 - HNSW uses M=16, ef_construction=128 and deterministic geometric levels. The first
-  unfiltered query builds/publishes a graph; the first query after a mutation rebuilds
-  it. Subsequent queries reuse the mmap graph. Construction temporarily copies
-  vectors into RAM. Incremental graph maintenance is future work.
-- Writes are synchronized individually. No batch ingestion or parallel reads yet.
+  unfiltered query builds/publishes a graph. After clean mutations, the next ANN
+  query restores the previous topology and constructs only new nodes, including
+  after reopening. Deleted nodes remain as routing links but cannot be results;
+  `compact()` removes them. Recovery and corrupt/incompatible indexes rebuild.
+- Incremental refresh still scans collection locations, copies graph vectors into
+  RAM, and rewrites the full snapshot. Deletes widen the candidate beam, so heavy
+  deletion increases query cost until compaction. No parallel reads yet.
+- Size batches to fit available memory and the LMDB map. Writes remain serialized.
 - Durable recovery keeps an additional copy of vector values in LMDB. The map defaults
   to 1 GiB; configure `DbOptions { map_size }` before opening for larger databases.
   Automatic resizing and vector quantization are not implemented.
@@ -84,11 +106,13 @@ close/reopen. The library-level rustdoc example is tested too.
 ## Benchmarks
 
 ```bash
-cargo run --release --example benchmark -- 1000 32 50
+cargo run --release --example benchmark -- 1000 32 50 128
+# Individual inserts for comparison: use batch size 1.
 ```
 
 This deterministic harness measures synchronized ingestion, initial graph build,
-warmed ANN and exact p50/p95 latency, recall@10, file sizes and Linux peak RSS.
+warmed ANN and exact p50/p95 latency, recall@10, mixed write/delete/query rounds,
+reopen latency, a full rebuild comparison, file sizes and Linux peak RSS.
 See [measured results](docs/benchmarks.md). Small synthetic results do not establish
 production-scale capacity or throughput.
 
