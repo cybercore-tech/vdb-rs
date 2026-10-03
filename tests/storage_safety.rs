@@ -242,3 +242,34 @@ fn compaction_preserves_f32_bits_in_recovery_payloads() {
         values.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn incompatible_materialized_dimension_returns_error_without_panicking() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let db = VectorDb::open(dir.path()).unwrap();
+        db.create_collection("docs", 3, Metric::Euclidean).unwrap();
+    }
+    let replacement = dir.path().join("replacement.vectors");
+    let mut writer = vdb::vector::VectorFileWriter::create(&replacement, 2).unwrap();
+    writer.append(&[1., 2.]).unwrap();
+    writer.flush().unwrap();
+    drop(writer);
+    std::fs::rename(replacement, dir.path().join("docs.vectors")).unwrap();
+    let db = VectorDb::open(dir.path()).unwrap();
+    let docs = db.collection("docs").unwrap();
+    assert!(matches!(
+        docs.query(&[1., 2., 3.], 1).exact().execute(),
+        Err(Error::Corrupt(_))
+    ));
+    assert!(matches!(
+        docs.query(&[1., 2., 3.], 1).execute(),
+        Err(Error::Corrupt(_))
+    ));
+    assert!(matches!(
+        docs.upsert_vector(&[1., 2., 3.], json!(null)),
+        Err(Error::Corrupt(_))
+    ));
+    docs.compact().unwrap();
+    assert!(docs.query(&[1., 2., 3.], 1).execute().unwrap().is_empty());
+}

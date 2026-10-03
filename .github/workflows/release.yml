@@ -9,12 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: '1.88.0'
           components: clippy,rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-targets: false
       - name: Verify tag matches package version
         run: |
           python3 - <<'PY'
@@ -24,7 +26,7 @@ jobs:
           assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'tag/package version mismatch'
           PY
       - run: ./scripts/release-gates.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: verified-crate
           path: target/package/*.crate
@@ -37,7 +39,7 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: verified-crate
           path: dist

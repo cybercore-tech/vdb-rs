@@ -246,6 +246,11 @@ impl Collection {
         validate_vector(vector, config.dim)?;
         let path = self.shared.vectors_path(&self.name);
         let mut writer = VectorFileWriter::open_append(&path)?;
+        if writer.dim() != config.dim {
+            return Err(Error::Corrupt(
+                "collection/vector-file dimension mismatch".into(),
+            ));
+        }
         let offset = writer.next_offset();
         let id = self
             .shared
@@ -366,8 +371,16 @@ impl QueryBuilder<'_> {
             .engine
             .list_vector_metas(&self.collection.name)?;
         let vf = VectorFile::open(&self.collection.shared.vectors_path(&self.collection.name))?;
+        if vf.dim() != config.dim {
+            return Err(Error::Corrupt(
+                "collection/vector-file dimension mismatch".into(),
+            ));
+        }
         let mut scored = Vec::new();
         for (id, meta) in metas {
+            if meta.dim != config.dim {
+                return Err(Error::Corrupt("vector-location dimension mismatch".into()));
+            }
             let metadata = self.collection.shared.engine.get_metadata(id)?;
             if self
                 .filter
@@ -399,6 +412,11 @@ impl QueryBuilder<'_> {
         let shared = &self.collection.shared;
         let name = &self.collection.name;
         let vf = VectorFile::open(&shared.vectors_path(name))?;
+        if vf.dim() != config.dim {
+            return Err(Error::Corrupt(
+                "collection/vector-file dimension mismatch".into(),
+            ));
+        }
         if !state
             .indexes
             .get(name)

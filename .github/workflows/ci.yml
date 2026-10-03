@@ -20,6 +20,19 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  workflows:
+    name: Workflow lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: actionlint
+      - run: actionlint
+      - name: Validate shell syntax
+        run: bash -n scripts/*.sh scripts/release-gates
+
   quality:
     name: Format and Clippy
     runs-on: ubuntu-latest
@@ -27,7 +40,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -35,7 +48,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -71,13 +84,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
 
       - name: Check default features
         run: >
@@ -144,13 +157,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
+        with:
+          cache-targets: false
 
       - name: Inspect package contents
         run: cargo package --locked --list -p vdb
@@ -159,7 +174,7 @@ jobs:
         run: ./scripts/validate-package.sh
 
       - name: Upload verified crate
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: vdb-crate
           path: target/package/*.crate
@@ -175,7 +190,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7.0.1
 
       - name: Install Rust 1.88
         uses: dtolnay/rust-toolchain@master
@@ -183,7 +198,7 @@ jobs:
           toolchain: "1.88.0"
 
       - name: Cache Rust
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@v2.9.2
 
       - name: Verify locked dependencies on MSRV
         run: cargo metadata --locked --format-version 1 > /dev/null

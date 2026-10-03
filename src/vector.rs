@@ -207,6 +207,11 @@ impl VectorFileWriter {
         })
     }
 
+    /// Dimension read from the file header.
+    pub fn dim(&self) -> u32 {
+        self.dim
+    }
+
     /// Byte offset where the next append will land.
     pub fn next_offset(&self) -> u64 {
         HEADER_LEN as u64 + self.count * block_len(self.dim) as u64
