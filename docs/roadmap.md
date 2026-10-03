@@ -10,17 +10,22 @@ baseline and offline embedding regression fixture, recall benchmark, CI/MSRV/pac
 
 Next priorities:
 
-1. Validate batches and incremental HNSW on large real embedding datasets.
-   Refresh still scans locations, hydrates all graph vectors and writes a full
-   snapshot; measure a mutable overlay/append journal and bounded checkpoints.
-   Establish workload-based compaction thresholds for retained deleted nodes.
-2. Collection-scoped location iteration and bounded top-k exact selection;
-   shared-table scans and full sorting still affect exact/filtered queries.
-3. Explicit update-by-ID and retry/idempotency semantics, richer filter expressions,
+1. Expand beyond the 122-document/426-chunk local-note pilot with larger real
+   embedding corpora and more independent relevance judgments. Evaluate hybrid
+   BM25/vector ranking: BM25 ranked known answers higher overall in the pilot.
+2. Integrate the standalone search example with Cyberdesk: background embeddings,
+   source hashes and chunk-ID manifests, real note tags, edit/delete reconciliation,
+   stale-version handling and links back to the original Markdown. Application
+   edits are not yet atomic; vdb-rs still inserts under new IDs.
+3. Reduce incremental refresh hydration and full snapshot writes. Measure a mutable
+   overlay/append journal, bounded checkpoints and compaction thresholds for
+   retained deleted nodes. Collection-scoped location iteration and bounded top-k
+   exact selection should address shared-table scans and full sorting.
+4. Explicit update-by-ID and retry/idempotency semantics, richer filter expressions,
    and collection statistics.
-4. Automatic map growth, concurrent read snapshots, and leaner durable vector
+5. Automatic map growth, concurrent read snapshots, and leaner durable vector
    payload encoding (currently JSON copies in LMDB).
-5. Quantization, IVF and async APIs only after measured need and dedicated coverage.
+6. Quantization, IVF and async APIs only after measured need and dedicated coverage.
 
 No crates.io publication is part of this milestone. Registry-name availability
 and maintainer ownership must be established before registry publishing.

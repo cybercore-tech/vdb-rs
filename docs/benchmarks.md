@@ -1,10 +1,17 @@
-# Synthetic benchmark baseline
+# Performance measurements
+
+Latest measurements cover [batch ingestion and incremental refresh](#batch-ingestion-and-incremental-refresh).
+The [real local-note pilot](semantic-search.md#local-pilot-results) measures document
+relevance, exact-vector recall and lifecycle behavior. Older synthetic cases below
+are retained as historical observations.
+
+## Historical individual-insert baseline
 
 Measured locally on 2026-10-02 with Rust 1.98.1, optimized release build, Linux,
 and synchronized individual inserts. Command:
 
 ```sh
-cargo run --release --example benchmark -- 1000 32 50
+cargo run --release --example benchmark -- 1000 32 50 1
 ```
 
 Deterministic random vectors, cosine metric, k=10, ef_search=128.
@@ -29,12 +36,13 @@ The benchmark must be repeated with larger, real-world embeddings and selective
 filters before setting capacity or latency targets. CI also tests recall across
 cosine, Euclidean and dot product and runs a small release benchmark smoke test.
 
-## Larger synthetic case
+## Historical larger synthetic case
 
-Final implementation, same machine and compiler:
+Pre-batch implementation, same machine and compiler. Use batch size 1 to reproduce
+the individual-insert workload on a newer checkout:
 
 ```sh
-cargo run --release --example benchmark -- 5000 128 50
+cargo run --release --example benchmark -- 5000 128 50 1
 ```
 
 | Measurement | Result |
@@ -48,7 +56,8 @@ cargo run --release --example benchmark -- 5000 128 50
 | Directory logical file sizes | 25,344,856 bytes |
 | Linux peak RSS | 31,084 KiB |
 
-This exposes the alpha's cost of synchronous ingestion and full graph rebuilds.
+These historical results show the cost of individual synchronized writes and
+full graph reconstruction before incremental maintenance was implemented.
 Warm ANN is faster than exact on this workload, but first-query latency is large.
 Higher dimensions and count lower recall at a fixed candidate budget; applications
 must tune ef_search against their own embeddings. Measurements overlapped local

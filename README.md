@@ -120,8 +120,25 @@ production-scale capacity or throughput.
 
 A [working evaluation and search example](docs/semantic-search.md) uses local
 technical notes, real CPU embeddings, source/snippet metadata and a BM25 keyword
-baseline. It verifies batch ingestion, incremental indexing, whole-note deletion,
-reindexing and reopening. Private notes stay local; CI uses frozen public embeddings.
+baseline. The local pilot covered 122 nonempty documents and 426 chunks: sampled
+ANN recall@10 was 100%, and an expected source appeared in the top five for 10 of
+11 questions. BM25 ranked expected answers higher overall (MRR@5 0.720 versus
+0.568); hybrid ranking and Cyberdesk integration remain follow-up work.
+
+It verifies batch ingestion, incremental indexing, whole-note deletion, reindexing
+and reopening. Private notes stay local; CI uses frozen public embeddings.
+After preparing and evaluating your corpus using the guide:
+
+```sh
+just semantic-search       # readable titles, sources, distances and snippets
+just semantic-search-json  # JSON for automation
+just semantic-report       # saved evaluation; also writes a Markdown copy
+```
+
+Default artifacts are under `dist/semantic-search/`: `report.json`, `report.md`
+and `db/`. Search does not generate an evaluation report. Use
+`realpath dist/semantic-search/report.md` to get its full local path. See the guide
+for custom directories and embedding another question against the cached model.
 
 ## Development and release
 
@@ -135,7 +152,8 @@ cargo run --example basic
 ```
 
 CI covers Linux/macOS, default/all features, formatting, Clippy, strict rustdoc,
-feature isolation, examples, packaging and the locked Rust 1.88 build. Weekly
+feature isolation, examples, offline semantic-search regressions, Python helper
+checks, packaging and the locked Rust 1.88 build. Weekly
 security checks audit dependencies and check licenses/sources; Dependabot maintains
 Cargo and Actions dependencies. Version tags run release gates and produce a
 **draft** GitHub release containing the verified `.crate`, SHA256 manifest and an

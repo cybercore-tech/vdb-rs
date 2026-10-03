@@ -75,7 +75,8 @@ a full snapshot. Local validation overlapped parts of these observations.
 
 ## Prepare your own corpus
 
-The embedding dependency belongs to the example tooling, not the Rust library.
+Preparation requires Python 3.11+. The embedding dependency belongs to the example
+tooling, not the Rust library.
 [FastEmbed documentation](https://qdrant.github.io/fastembed/Getting%20Started/)
 describes local ONNX inference; its [supported models](https://qdrant.github.io/fastembed/examples/Supported_Models/)
 list the selected model. Initial setup downloads packages/model files. Document
@@ -149,6 +150,8 @@ Read a saved evaluation report and write a Markdown copy beside it:
 ```sh
 just semantic-report dist/my-notes/report.json
 ```
+
+For a full local file path, run `realpath dist/my-notes/report.md`.
 
 Search does not create an evaluation report; the `evaluate` command above writes
 it through the explicit output redirection. Local reports live under the selected
