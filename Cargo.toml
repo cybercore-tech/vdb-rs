@@ -32,7 +32,7 @@ async = ["dep:tokio"]
 
 [dependencies]
 fs2 = { version = "0.4", optional = true }
-thiserror = "1"
+thiserror = "2"
 heed = { version = "0.22", default-features = false, features = ["serde-json"], optional = true }
 memmap2 = { version = "0.9", optional = true }
 byteorder = { version = "1", optional = true }
