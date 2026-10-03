@@ -26,10 +26,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: actionlint
-      - run: actionlint
+      - name: Install and run pinned actionlint
+        run: |
+          GOBIN="$RUNNER_TEMP/actionlint-bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$RUNNER_TEMP/actionlint-bin/actionlint"
       - name: Validate shell syntax
         run: bash -n scripts/*.sh scripts/release-gates
 
@@ -161,11 +161,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        uses: Swatinem/rust-cache@v2.9.2
-        with:
-          cache-targets: false
 
       - name: Inspect package contents
         run: cargo package --locked --list -p vdb

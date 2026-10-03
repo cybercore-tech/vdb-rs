@@ -14,19 +14,21 @@ rejects populated legacy databases rather than interpreting them incorrectly.
 ```toml
 [dependencies]
 vdb = { git = "https://github.com/cybercore-tech/vdb-rs" }
+serde_json = "1"
+tempfile = "3" # only needed for the temporary-directory example
 ```
 
 ```rust
 use vdb::{Metric, VectorDb};
-# fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let temporary = tempfile::tempdir()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+let temporary = tempfile::tempdir()?;
 let db = VectorDb::open(temporary.path())?;
 let docs = db.create_collection("docs", 3, Metric::Cosine)?;
 let id = docs.upsert_vector(&[1.0, 0.0, 0.0], serde_json::json!({"tags": ["rust"]}))?;
 let neighbors = docs.query(&[1.0, 0.0, 0.0], 10).ef_search(128).execute()?;
 assert_eq!(neighbors[0].id, id);
-# Ok(())
-# }
+Ok(())
+}
 ```
 
 Run `cargo run --example basic` for insertion, metadata filtering and a real
