@@ -24,7 +24,7 @@ jobs:
           assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'tag/package version mismatch'
           PY
       - run: ./scripts/release-gates.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: verified-crate
           path: target/package/*.crate
