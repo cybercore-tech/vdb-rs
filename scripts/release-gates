@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+mode="${1:-full}"
+case "$mode" in
+  quick)
+    cargo fmt --all --check
+    git diff --check
+    git diff --cached --check
+    cargo check --locked --workspace --all-targets --all-features
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+    ;;
+  full|release)
+    ./scripts/validate.sh
+    ./scripts/validate-features.sh
+    cargo run --locked --example basic
+    cargo +1.88.0 check --locked --workspace --all-targets --all-features
+    cargo +1.88.0 test --locked --workspace --all-features --lib --tests
+    cargo +1.88.0 test --locked --workspace --all-features --doc
+    RUSTDOCFLAGS='-D warnings' cargo +1.88.0 doc --locked --workspace --all-features --no-deps
+    if [[ "$mode" == release ]]; then
+      if [[ -n "$(git status --porcelain)" ]]; then
+        echo 'Release packaging requires a clean committed tree.' >&2
+        exit 1
+      fi
+      ./scripts/validate-package.sh
+      cargo publish --locked --dry-run -p vdb
+    fi
+    ;;
+  *) echo 'Usage: ./scripts/release-gates [quick|full|release]' >&2; exit 2 ;;
+esac
+printf '\nRELEASE GATE (%s): GREEN\n' "$mode"

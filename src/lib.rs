@@ -1,12 +1,31 @@
-//! `vdb`: an embedded, crash-safe, Rust-native vector database.
+//! Embedded vector search with transactional LMDB recovery and mmap HNSW graphs.
 //!
-//! LMDB (via `heed`, see `docs/adr/0001-use-lmdb-as-kv-substrate.md`) holds
-//! structured metadata and the WAL; per-collection files hold vector
-//! payloads (`.vectors`) and the HNSW index (`.index`), both mmap'd for
-//! zero-copy reads. See `docs/arch.md` for the full layered architecture.
+//! The alpha serializes public operations and rebuilds indexes after mutations.
+//! See the repository README for durability assumptions and format compatibility.
+//!
+//! ```
+//! # #[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! use vdb::{Metric, VectorDb};
+//! let temporary = tempfile::tempdir()?;
+//! let db = VectorDb::open(temporary.path())?;
+//! let docs = db.create_collection("docs", 3, Metric::Cosine)?;
+//! let id = docs.upsert_vector(&[1.0, 0.0, 0.0], serde_json::json!({"tags": ["rust"]}))?;
+//! let neighbors = docs.query(&[1.0, 0.0, 0.0], 10).execute()?;
+//! assert_eq!(neighbors[0].id, id);
+//! # Ok(())
+//! # }
+//! # fn main() {
+//! # #[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
+//! # example().unwrap();
+//! # }
+//! ```
 #![warn(missing_docs)]
 
 pub mod error;
+
+#[cfg(feature = "storage")]
+mod checksum;
 
 /// KV substrate (LMDB via `heed`) — see `docs/adr/0001-use-lmdb-as-kv-substrate.md`.
 #[cfg(feature = "storage")]
@@ -37,7 +56,7 @@ pub mod db;
 pub use error::{Error, Result};
 
 #[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
-pub use db::{Collection, QueryBuilder, ScoredVector, VectorDb};
+pub use db::{Collection, DbOptions, QueryBuilder, ScoredVector, VectorDb};
 #[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
 pub use metric::Metric;
 #[cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]

@@ -1,7 +1,7 @@
 //! `.vectors` file: per-collection, contiguous, 32-byte-aligned `f32`
-//! arrays. Layout: a 32-byte header (magic `b"VDB1"`, `dim: u32`,
-//! `count: u64`, 16 reserved bytes), then one 32-byte-aligned block per
-//! vector. See `docs/storage_layout.md`.
+//! arrays. Layout: a 32-byte checksummed header, then 32-byte-aligned
+//! vector blocks containing little-endian f32s and an eight-byte checksum.
+//! See `docs/storage_layout.md`.
 //!
 //! Reads go through `VectorFile`, which mmaps the file. Writes go through
 //! `VectorFileWriter`, which uses plain buffered I/O — mmap is for
@@ -18,7 +18,7 @@ use memmap2::Mmap;
 use crate::error::{Error, Result};
 
 /// Magic bytes identifying a `.vectors` file.
-pub const MAGIC: &[u8; 4] = b"VDB1";
+pub const MAGIC: &[u8; 4] = b"VDB2";
 
 /// Every offset (header end, and each vector block) is a multiple of this.
 const ALIGN: usize = 32;
@@ -28,6 +28,44 @@ const HEADER_LEN: usize = 32;
 
 fn aligned(len: usize) -> usize {
     len.div_ceil(ALIGN) * ALIGN
+}
+
+pub(crate) fn block_len(dim: u32) -> usize {
+    aligned(dim as usize * 4 + 8)
+}
+
+fn validate_header(header: &[u8]) -> Result<()> {
+    if crate::checksum::checksum(&header[..16])
+        != u64::from_le_bytes(header[16..24].try_into().unwrap())
+        || header[24..32] != [0; 8]
+    {
+        return Err(Error::Corrupt(
+            "vector header checksum/reserved fields".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate supported dimensionality (1 through 65,536).
+pub(crate) fn validate_dimension(dim: u32) -> Result<()> {
+    if dim == 0 || dim > 65_536 {
+        return Err(Error::InvalidInput(
+            "dimension must be between 1 and 65536".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_layout(dim: u32, count: u64, len: u64) -> Result<()> {
+    validate_dimension(dim).map_err(|_| Error::Corrupt("invalid vector dimension".into()))?;
+    let expected = count
+        .checked_mul(block_len(dim) as u64)
+        .and_then(|n| n.checked_add(HEADER_LEN as u64))
+        .ok_or_else(|| Error::Corrupt("vector file size overflow".into()))?;
+    if expected != len {
+        return Err(Error::Corrupt("vector count/file length mismatch".into()));
+    }
+    Ok(())
 }
 
 /// A read-only, mmap'd `.vectors` file for one collection.
@@ -50,7 +88,13 @@ impl VectorFile {
                 got: mmap.get(0..4).unwrap_or_default().to_vec(),
             });
         }
+        validate_header(&mmap[..HEADER_LEN])?;
         let dim = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
+        validate_layout(
+            dim,
+            u64::from_le_bytes(mmap[8..16].try_into().unwrap()),
+            mmap.len() as u64,
+        )?;
 
         Ok(Self { mmap, dim })
     }
@@ -68,16 +112,35 @@ impl VectorFile {
     /// Read the vector stored at `offset` (as returned by
     /// [`VectorFileWriter::append`] / recorded in a `VectorMeta`).
     pub fn read_at(&self, offset: u64) -> Result<&[f32]> {
-        let offset = offset as usize;
+        let offset =
+            usize::try_from(offset).map_err(|_| Error::Corrupt("vector offset overflow".into()))?;
+        if offset < HEADER_LEN || !(offset - HEADER_LEN).is_multiple_of(block_len(self.dim)) {
+            return Err(Error::Corrupt("invalid vector block offset".into()));
+        }
         let byte_len = self.dim as usize * 4;
+        let end = offset
+            .checked_add(byte_len)
+            .ok_or_else(|| Error::Corrupt("vector range overflow".into()))?;
         let bytes = self
             .mmap
-            .get(offset..offset + byte_len)
-            .ok_or_else(|| Error::BadMagic {
-                expected: MAGIC,
-                got: Vec::new(),
-            })?;
+            .get(offset..end)
+            .ok_or_else(|| Error::Corrupt("vector outside file".into()))?;
+        if cfg!(target_endian = "big") {
+            return Err(Error::Corrupt(
+                "zero-copy vectors require a little-endian host".into(),
+            ));
+        }
 
+        let checksum_end = end
+            .checked_add(8)
+            .ok_or_else(|| Error::Corrupt("checksum range overflow".into()))?;
+        let stored = self
+            .mmap
+            .get(end..checksum_end)
+            .ok_or_else(|| Error::Corrupt("missing vector checksum".into()))?;
+        if crate::checksum::checksum(bytes) != u64::from_le_bytes(stored.try_into().unwrap()) {
+            return Err(Error::Corrupt("vector payload checksum".into()));
+        }
         // Safety: `bytes` is exactly `dim` little-endian f32s written by
         // `VectorFileWriter::append`, and is 4-byte aligned because every
         // vector block starts at a 32-byte-aligned offset.
@@ -123,6 +186,7 @@ impl VectorFileWriter {
     /// Create a new `.vectors` file at `path` and write its header.
     /// Fails if `path` already exists.
     pub fn create(path: &Path, dim: u32) -> Result<Self> {
+        validate_dimension(dim)?;
         let file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
@@ -131,7 +195,11 @@ impl VectorFileWriter {
         file.write_all(MAGIC)?;
         file.write_all(&dim.to_le_bytes())?;
         file.write_all(&0u64.to_le_bytes())?; // count, patched by flush()
-        file.write_all(&[0u8; HEADER_LEN - 16])?; // reserved
+        let mut prefix = Vec::from(MAGIC.as_slice());
+        prefix.extend(dim.to_le_bytes());
+        prefix.extend(0u64.to_le_bytes());
+        file.write_all(&crate::checksum::checksum(&prefix).to_le_bytes())?;
+        file.write_all(&[0u8; 8])?; // reserved
         Ok(Self {
             file,
             dim,
@@ -139,9 +207,19 @@ impl VectorFileWriter {
         })
     }
 
+    /// Byte offset where the next append will land.
+    pub fn next_offset(&self) -> u64 {
+        HEADER_LEN as u64 + self.count * block_len(self.dim) as u64
+    }
+
     /// Append one vector. Returns the byte offset it was written at, for
     /// storing in a `VectorMeta.offset`.
     pub fn append(&mut self, vector: &[f32]) -> Result<u64> {
+        if vector.iter().any(|v| !v.is_finite()) {
+            return Err(Error::InvalidInput(
+                "vectors must contain finite values".into(),
+            ));
+        }
         if vector.len() as u32 != self.dim {
             return Err(Error::DimensionMismatch {
                 expected: self.dim,
@@ -149,15 +227,15 @@ impl VectorFileWriter {
             });
         }
 
-        let block_len = aligned(vector.len() * 4);
+        let block_len = block_len(self.dim);
         let offset = HEADER_LEN as u64 + self.count * block_len as u64;
 
-        let mut written = 0;
-        for x in vector {
-            self.file.write_all(&x.to_le_bytes())?;
-            written += 4;
-        }
-        self.file.write_all(&vec![0u8; block_len - written])?; // pad to alignment
+        let bytes: Vec<u8> = vector.iter().flat_map(|x| x.to_le_bytes()).collect();
+        self.file.write_all(&bytes)?;
+        self.file
+            .write_all(&crate::checksum::checksum(&bytes).to_le_bytes())?;
+        self.file
+            .write_all(&vec![0u8; block_len - bytes.len() - 8])?;
 
         self.count += 1;
         Ok(offset)
@@ -182,9 +260,11 @@ impl VectorFileWriter {
                 got: header[0..4].to_vec(),
             });
         }
+        validate_header(&header)?;
         let dim = u32::from_le_bytes(header[4..8].try_into().unwrap());
         let count = u64::from_le_bytes(header[8..16].try_into().unwrap());
 
+        validate_layout(dim, count, file.metadata()?.len())?;
         file.seek(SeekFrom::End(0))?;
 
         Ok(Self {
@@ -201,6 +281,10 @@ impl VectorFileWriter {
         let pos = file.stream_position()?;
         file.seek(SeekFrom::Start(8))?;
         file.write_all(&self.count.to_le_bytes())?;
+        let mut prefix = Vec::from(MAGIC.as_slice());
+        prefix.extend(self.dim.to_le_bytes());
+        prefix.extend(self.count.to_le_bytes());
+        file.write_all(&crate::checksum::checksum(&prefix).to_le_bytes())?;
         file.seek(SeekFrom::Start(pos))?;
         file.sync_all()?;
         Ok(())

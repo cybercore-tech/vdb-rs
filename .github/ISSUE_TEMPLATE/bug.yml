@@ -1,0 +1,17 @@
+name: Bug report
+description: Report a correctness, recovery, or performance issue.
+body:
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction and expected behavior
+      description: Include a minimal Rust example and whether this followed an interrupted write.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Crate revision, rustc version, OS, filesystem, dimensions and collection sizes.
+    validations:
+      required: true

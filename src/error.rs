@@ -6,6 +6,22 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// All errors `vdb` can return.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// The database directory is already open by another engine.
+    #[error("database is already open: {0}")]
+    DatabaseLocked(String),
+    /// A name, vector, or search parameter is invalid.
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    /// The file or database format is corrupt or unsupported.
+    #[error("corrupt or unsupported storage: {0}")]
+    Corrupt(String),
+    /// A collection handle refers to a deleted incarnation.
+    #[error("stale collection handle: {0}")]
+    StaleCollection(String),
+    /// A worker panicked while holding the database lock.
+    #[error("database lock poisoned; drop handles and reopen")]
+    Poisoned,
+
     /// An I/O operation failed.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),

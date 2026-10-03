@@ -28,6 +28,16 @@ impl Metric {
         }
     }
 
+    /// Compare scores from best to worst for this metric.
+    #[cfg(all(feature = "storage", feature = "serde-query"))]
+    pub(crate) fn compare(self, a: f32, b: f32) -> std::cmp::Ordering {
+        if self.higher_is_better() {
+            b.total_cmp(&a)
+        } else {
+            a.total_cmp(&b)
+        }
+    }
+
     /// The lowercase name this metric is stored as in a `CollectionConfig`
     /// (see `crate::kv::CollectionConfig::metric`, the inverse of this).
     pub fn as_str(self) -> &'static str {
@@ -50,28 +60,28 @@ impl Metric {
     }
 }
 
+fn dot64(a: &[f32], b: &[f32]) -> f64 {
+    a.iter()
+        .zip(b)
+        .map(|(&x, &y)| f64::from(x) * f64::from(y))
+        .sum()
+}
 fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    dot64(a, b) as f32
 }
-
-fn norm(v: &[f32]) -> f32 {
-    dot(v, v).sqrt()
-}
-
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    let denom = norm(a) * norm(b);
+    let denom = dot64(a, a).sqrt() * dot64(b, b).sqrt();
     if denom == 0.0 {
-        return 0.0;
+        return 1.0;
     }
-    1.0 - (dot(a, b) / denom)
+    (1.0 - (dot64(a, b) / denom).clamp(-1.0, 1.0)) as f32
 }
-
 fn euclidean(a: &[f32], b: &[f32]) -> f32 {
     a.iter()
         .zip(b)
-        .map(|(x, y)| (x - y).powi(2))
-        .sum::<f32>()
-        .sqrt()
+        .map(|(&x, &y)| (f64::from(x) - f64::from(y)).powi(2))
+        .sum::<f64>()
+        .sqrt() as f32
 }
 
 #[cfg(test)]
@@ -95,6 +105,20 @@ mod tests {
     }
 
     #[test]
+    fn finite_extreme_vectors_do_not_produce_nan_scores() {
+        let vector = [f32::MAX, f32::MAX];
+        assert_eq!(Metric::Cosine.distance(&vector, &vector), 0.0);
+        assert_eq!(Metric::Euclidean.distance(&vector, &vector), 0.0);
+        assert!(!Metric::DotProduct.distance(&vector, &vector).is_nan());
+    }
+
+    #[test]
+    fn zero_norm_cosine_vectors_do_not_rank_as_perfect_matches() {
+        assert_eq!(Metric::Cosine.distance(&[0.0, 0.0], &[1.0, 0.0]), 1.0);
+        assert_eq!(Metric::Cosine.distance(&[0.0, 0.0], &[0.0, 0.0]), 1.0);
+    }
+
+    #[test]
     fn only_dot_product_ranks_higher_as_better() {
         assert!(!Metric::Cosine.higher_is_better());
         assert!(!Metric::Euclidean.higher_is_better());
@@ -109,6 +133,8 @@ mod tests {
                 dim: 1,
                 metric: m.as_str().to_string(),
                 next_id: 0,
+                generation: 0,
+                revision: 0,
             };
             assert_eq!(config.metric(), Some(m));
         }

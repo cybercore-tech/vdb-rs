@@ -1,8 +1,7 @@
 //! Query builder and metadata filter DSL.
 //!
-//! Phase 1 scaffolding: only a single `field CONTAINS "value"` predicate is
-//! represented. The full DSL (`AND`/`OR`, comparison operators) lands in
-//! Phase 5 — see `PROJECT_SPEC.md`'s phase list.
+//! A single array-membership predicate. Filtered queries deliberately use exact
+//! search. Richer filter expressions are future work.
 
 use serde::{Deserialize, Serialize};
 

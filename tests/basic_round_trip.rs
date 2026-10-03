@@ -1,10 +1,8 @@
-//! End-to-end round trip across today's Phase 2 primitives: create a
+//! End-to-end round trip across lower-level storage primitives: create a
 //! collection, write a vector to its `.vectors` file, record where it
 //! landed in the `vectors` LMDB table, then read it back through both.
 //!
-//! There's no `VectorDb`/`Collection` API yet (Phase 3) — this is what
-//! using the crate actually looks like right now, and doubles as the
-//! source for the README's usage example, so that example stays honest.
+//! Lower-level primitives remain available; use VectorDb for recovery guarantees.
 #![cfg(feature = "storage")]
 
 use vdb::kv::{CollectionConfig, KvEngine, VectorMeta};
@@ -22,6 +20,8 @@ fn write_a_vector_and_read_it_back_through_kv_engine_and_vector_file() {
                 dim: 3,
                 metric: "cosine".into(),
                 next_id: 0,
+                generation: 0,
+                revision: 0,
             },
         )
         .unwrap();

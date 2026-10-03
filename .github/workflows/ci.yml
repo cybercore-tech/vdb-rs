@@ -6,7 +6,11 @@ on:
       - "**"
   pull_request:
     branches:
-      - master
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -19,6 +23,7 @@ jobs:
   quality:
     name: Format and Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -40,7 +45,7 @@ jobs:
 
       - name: Clippy
         run: >
-          cargo clippy
+          cargo clippy --locked
           --workspace
           --all-targets
           --
@@ -48,7 +53,7 @@ jobs:
 
       - name: Clippy all features
         run: >
-          cargo clippy
+          cargo clippy --locked
           --workspace
           --all-targets
           --all-features
@@ -56,8 +61,13 @@ jobs:
           -D warnings
 
   test:
-    name: Tests
-    runs-on: ubuntu-latest
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -71,26 +81,26 @@ jobs:
 
       - name: Check default features
         run: >
-          cargo check
+          cargo check --locked
           --workspace
           --all-targets
 
       - name: Test default features
         run: >
-          cargo test
+          cargo test --locked
           --workspace
           --all-targets
 
       - name: Check all features
         run: >
-          cargo check
+          cargo check --locked
           --workspace
           --all-targets
           --all-features
 
       - name: Test all features
         run: >
-          cargo test
+          cargo test --locked
           --workspace
           --all-features
           --lib
@@ -100,7 +110,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: >
-          cargo test
+          cargo test --locked
           --workspace
           --doc
           --all-features
@@ -109,40 +119,28 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: >
-          cargo doc
+          cargo doc --locked
           --workspace
           --no-deps
           --all-features
 
       - name: Feature isolation — no default features
-        run: cargo check --workspace --no-default-features
+        run: cargo check --locked --workspace --no-default-features
 
-      # Every project-critical combination from PROJECT_SPEC.md's
-      # "Required Feature-Isolation Checks" (not committed — see
-      # .gitignore — kept in sync locally; scripts/validate-features.sh
-      # runs the same set).
-      - name: Feature isolation — project-critical combinations
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Feature isolation
+        run: ./scripts/validate-features.sh
 
-          for features in \
-            storage \
-            index-hnsw \
-            metrics \
-            serde-query \
-            storage,index-hnsw \
-            storage,index-hnsw,metrics \
-            storage,serde-query \
-            storage,metrics,serde-query \
-          ; do
-            echo "===== --no-default-features --features $features ====="
-            cargo check -p vdb --no-default-features --features "$features"
-          done
+      - name: Run public API example
+        run: cargo run --locked --example basic
+
+      - name: Benchmark smoke test
+        if: runner.os == 'Linux'
+        run: cargo run --locked --release --example benchmark -- 128 16 5
 
   package:
     name: Package readiness
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -155,11 +153,22 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Inspect package contents
-        run: cargo package --list -p vdb
+        run: cargo package --locked --list -p vdb
+
+      - name: Build and verify distributable crate
+        run: ./scripts/validate-package.sh
+
+      - name: Upload verified crate
+        uses: actions/upload-artifact@v4
+        with:
+          name: vdb-crate
+          path: target/package/*.crate
+          if-no-files-found: error
 
   msrv:
     name: MSRV 1.88
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
@@ -176,19 +185,19 @@ jobs:
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Resolve dependencies for MSRV
-        run: rm -f Cargo.lock
+      - name: Verify locked dependencies on MSRV
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
       - name: Check all targets and features on MSRV
         run: >
-          cargo check
+          cargo check --locked
           --workspace
           --all-targets
           --all-features
 
       - name: Test all targets and features on MSRV
         run: >
-          cargo test
+          cargo test --locked
           --workspace
           --all-features
           --lib
@@ -198,7 +207,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: >
-          cargo test
+          cargo test --locked
           --workspace
           --doc
           --all-features
@@ -207,7 +216,7 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: >
-          cargo doc
+          cargo doc --locked
           --workspace
           --no-deps
           --all-features

@@ -1,11 +1,11 @@
 [package]
 name = "vdb"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Embedded, crash-safe, Rust-native vector database (LMDB metadata + mmap'd vectors/HNSW index)"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/darkstardevx/vdb-rs"
+repository = "https://github.com/cybercore-tech/vdb-rs"
 keywords = ["vector-database", "embedded", "ann", "hnsw", "lmdb"]
 categories = ["database-implementations", "data-structures"]
 
@@ -16,23 +16,24 @@ default = ["storage", "index-hnsw", "metrics", "serde-query"]
 # heed's SerdeJson codec is what KvEngine uses to store collection configs.
 # byteorder is required directly: heed's U64<Endian> key codec (used for
 # the vectors/metadata/logs tables) is not re-exported by heed itself.
-storage = ["dep:heed", "dep:memmap2", "dep:serde", "dep:serde_json", "dep:byteorder"]
+storage = ["dep:heed", "dep:memmap2", "dep:serde", "dep:serde_json", "dep:byteorder", "dep:fs2"]
 # mmap'd HNSW .index files. See ADR-0002. Requires storage's mmap plumbing.
 index-hnsw = ["storage"]
 # Distance/similarity metric implementations (cosine, euclidean, dot).
 metrics = []
 # Query-builder filter DSL (de)serialization.
 serde-query = ["dep:serde", "dep:serde_json"]
-# Long-term capability, not yet isolation-tested (see PROJECT_SPEC.md).
+# Reserved capability; no public implementation yet (see docs/roadmap.md).
 quantization = ["dep:half"]
-# Long-term capability, not yet isolation-tested (see PROJECT_SPEC.md).
+# Reserved capability; no public implementation yet (see docs/roadmap.md).
 index-ivf = ["storage"]
-# Long-term capability, not yet isolation-tested (see PROJECT_SPEC.md).
+# Reserved capability; no public implementation yet (see docs/roadmap.md).
 async = ["dep:tokio"]
 
 [dependencies]
+fs2 = { version = "0.4", optional = true }
 thiserror = "1"
-heed = { version = "0.22", features = ["serde-json"], optional = true }
+heed = { version = "0.22", default-features = false, features = ["serde-json"], optional = true }
 memmap2 = { version = "0.9", optional = true }
 byteorder = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -43,3 +44,11 @@ tokio = { version = "1", features = ["rt", "sync"], optional = true }
 [dev-dependencies]
 tempfile = "3"
 serde_json = "1"
+
+[[example]]
+name = "basic"
+required-features = ["storage", "metrics", "serde-query"]
+
+[[example]]
+name = "benchmark"
+required-features = ["storage", "metrics", "serde-query", "index-hnsw"]

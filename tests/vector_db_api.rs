@@ -1,10 +1,4 @@
-//! End-to-end exercise of the real public API (`VectorDb`/`Collection`/
-//! `QueryBuilder`), matching `PROJECT_SPEC.md`'s "Primary user
-//! experience" example — this is the first real implementation of it, so
-//! this test doubles as proof the example actually works, and is the
-//! source for the README's usage example (kept honest the same way
-//! `tests/basic_round_trip.rs` keeps the Phase 2/3 primitives example
-//! honest).
+//! End-to-end public API insertion and metadata filtering example.
 #![cfg(all(feature = "storage", feature = "metrics", feature = "serde-query"))]
 
 use vdb::{Filter, Metric, VectorDb};

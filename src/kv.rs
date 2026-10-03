@@ -2,16 +2,17 @@
 //!
 //! See `docs/adr/0001-use-lmdb-as-kv-substrate.md` for why LMDB was chosen,
 //! and `docs/storage_layout.md` for the named-database (table) layout this
-//! wraps: `collections`, `vectors`, `metadata`, `logs`.
+//! wraps: collection configs, vector locations, metadata, payloads, recovery,
+//! allocation state and caller-managed audit logs.
 
 use std::path::Path;
 
-use byteorder::NativeEndian;
+use byteorder::BigEndian;
 use heed::types::{SerdeJson, Str, U64};
 use heed::{Database, Env, EnvOpenOptions};
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Configuration for one collection, stored in the `collections` table.
 ///
@@ -26,12 +27,15 @@ pub struct CollectionConfig {
     pub dim: u32,
     /// Distance/similarity metric, stored as its lowercase name.
     pub metric: String,
-    /// Next vector ID to allocate in this collection — mutable allocation
-    /// state, not really "config", but kept in the same record so
-    /// [`KvEngine::allocate_vector_id`] can read-increment-write it
-    /// atomically within one LMDB transaction rather than needing a
-    /// second table.
+    /// Last database-wide allocation plus one for this collection.
+    /// Informational only; the state table is the allocation authority.
     pub next_id: u64,
+    /// Unique incarnation, preventing deleted handles from accessing replacements.
+    #[serde(default)]
+    pub generation: u64,
+    /// Mutation revision used to invalidate derived indexes.
+    #[serde(default)]
+    pub revision: u64,
 }
 
 #[cfg(feature = "metrics")]
@@ -61,7 +65,7 @@ pub struct VectorMeta {
     pub dim: u32,
 }
 
-/// The kind of change a WAL [`Operation`] records.
+/// The kind of change an audit [`Operation`] records.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OperationType {
     /// A vector was inserted or replaced.
@@ -70,10 +74,9 @@ pub enum OperationType {
     Delete,
 }
 
-/// One WAL entry, stored in the `logs` table, keyed by a caller-supplied
-/// monotonic sequence number. Replayed on `open` if a previous session
-/// left a dirty flag set — replay itself is Phase 6, not yet implemented;
-/// [`KvEngine::replay_log`] only returns the recorded entries so far.
+/// Legacy caller-managed audit entry in the `logs` table.
+/// Database recovery uses the transactional `pending` and `payloads` tables;
+/// these audit entries are not replay instructions.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Operation {
     /// What kind of change this entry records.
@@ -84,15 +87,27 @@ pub struct Operation {
     pub timestamp: u64,
 }
 
-/// One open LMDB environment, holding all four of `vdb`'s named
-/// sub-databases (see `docs/storage_layout.md`).
+/// A durable instruction to rebuild or remove a collection's derived files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum Recovery {
+    Rebuild,
+    Remove,
+}
+
+/// Exclusively opened LMDB substrate. Prefer `VectorDb` for transactional writes.
 pub struct KvEngine {
-    #[allow(dead_code)]
     env: Env,
     collections: Database<Str, SerdeJson<CollectionConfig>>,
-    vectors: Database<U64<NativeEndian>, SerdeJson<VectorMeta>>,
-    metadata: Database<U64<NativeEndian>, SerdeJson<serde_json::Value>>,
-    logs: Database<U64<NativeEndian>, SerdeJson<Operation>>,
+    vectors: Database<U64<BigEndian>, SerdeJson<VectorMeta>>,
+    metadata: Database<U64<BigEndian>, SerdeJson<serde_json::Value>>,
+    logs: Database<U64<BigEndian>, SerdeJson<Operation>>,
+    state: Database<Str, U64<BigEndian>>,
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    payloads: Database<U64<BigEndian>, SerdeJson<Vec<f32>>>,
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pending: Database<Str, SerdeJson<Recovery>>,
+    // Declared after env so the directory remains locked through LMDB close.
+    _lock: std::fs::File,
 }
 
 impl KvEngine {
@@ -105,15 +120,39 @@ impl KvEngine {
     /// mismatched `map_size`/`max_dbs`, must not hold transactions across a
     /// process abort, and must not point it at a remote filesystem. `path`
     /// is expected to be owned exclusively by one `KvEngine` at a time —
-    /// enforced at the `VectorDb` layer once that lands.
+    /// enforced by an advisory directory lock.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_map_size(path, 1024 * 1024 * 1024)
+    }
+
+    pub(crate) fn open_with_map_size(path: &Path, map_size: usize) -> Result<Self> {
+        if map_size < 1024 * 1024 {
+            return Err(Error::InvalidInput(
+                "LMDB map size must be at least 1 MiB".into(),
+            ));
+        }
         std::fs::create_dir_all(path)?;
 
-        // Safety: see the invariants documented above.
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path.join("vdb.lock"))?;
+        fs2::FileExt::try_lock_exclusive(&lock).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::WouldBlock {
+                Error::DatabaseLocked(path.display().to_string())
+            } else {
+                Error::Io(e)
+            }
+        })?;
+        // Safety: the advisory lock excludes other engines using this API.
+        // Callers must keep the directory on a local filesystem and must not
+        // modify LMDB or mapped files externally while this engine is open.
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(1024 * 1024 * 1024) // 1 GiB; revisit growth policy later.
-                .max_dbs(4) // collections, vectors, metadata, logs
+                .map_size(map_size)
+                .max_dbs(7) // collections, vectors, metadata, logs, state, payloads, pending
                 .open(path)?
         };
 
@@ -122,6 +161,31 @@ impl KvEngine {
         let vectors = env.create_database(&mut wtxn, Some("vectors"))?;
         let metadata = env.create_database(&mut wtxn, Some("metadata"))?;
         let logs = env.create_database(&mut wtxn, Some("logs"))?;
+        let state: Database<Str, U64<BigEndian>> = env.create_database(&mut wtxn, Some("state"))?;
+        let _payloads: Database<U64<BigEndian>, SerdeJson<Vec<f32>>> =
+            env.create_database(&mut wtxn, Some("payloads"))?;
+        let _pending: Database<Str, SerdeJson<Recovery>> =
+            env.create_database(&mut wtxn, Some("pending"))?;
+        match state.get(&wtxn, "format")? {
+            None => {
+                if !collections.is_empty(&wtxn)?
+                    || !vectors.is_empty(&wtxn)?
+                    || !metadata.is_empty(&wtxn)?
+                    || !logs.is_empty(&wtxn)?
+                {
+                    return Err(Error::Corrupt(
+                        "legacy pre-alpha database; export with its original revision first".into(),
+                    ));
+                }
+                state.put(&mut wtxn, "format", &2)?;
+            }
+            Some(2) => {}
+            Some(version) => {
+                return Err(Error::Corrupt(format!(
+                    "unsupported database format {version}"
+                )));
+            }
+        }
         wtxn.commit()?;
 
         Ok(Self {
@@ -130,6 +194,12 @@ impl KvEngine {
             vectors,
             metadata,
             logs,
+            state,
+            #[cfg(all(feature = "metrics", feature = "serde-query"))]
+            payloads: _payloads,
+            #[cfg(all(feature = "metrics", feature = "serde-query"))]
+            pending: _pending,
+            _lock: lock,
         })
     }
 
@@ -170,8 +240,8 @@ impl KvEngine {
         Ok(existed)
     }
 
-    /// Atomically allocate the next vector ID for `collection` (read the
-    /// stored `next_id`, increment it, write it back, all in one LMDB
+    /// Atomically allocate a database-wide ID for `collection` (read the
+    /// database-wide `next_id`, increment it, write it back, all in one LMDB
     /// transaction) and return the allocated ID.
     pub fn allocate_vector_id(&self, collection: &str) -> Result<u64> {
         let mut wtxn = self.env.write_txn()?;
@@ -179,8 +249,12 @@ impl KvEngine {
             .collections
             .get(&wtxn, collection)?
             .ok_or_else(|| crate::error::Error::CollectionNotFound(collection.to_string()))?;
-        let id = config.next_id;
-        config.next_id += 1;
+        let id = self.state.get(&wtxn, "next_id")?.unwrap_or(0);
+        let next = id
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("ID space exhausted".into()))?;
+        config.next_id = next;
+        self.state.put(&mut wtxn, "next_id", &next)?;
         self.collections.put(&mut wtxn, collection, &config)?;
         wtxn.commit()?;
         Ok(id)
@@ -251,7 +325,7 @@ impl KvEngine {
         Ok(existed)
     }
 
-    /// Append one WAL entry, keyed by a caller-supplied monotonic sequence number.
+    /// Append one caller-managed audit entry, keyed by a caller-supplied monotonic sequence number.
     pub fn append_log(&self, seq: u64, op: &Operation) -> Result<()> {
         let mut wtxn = self.env.write_txn()?;
         self.logs.put(&mut wtxn, &seq, op)?;
@@ -259,15 +333,182 @@ impl KvEngine {
         Ok(())
     }
 
-    /// Return every logged WAL entry in sequence order.
+    /// Return every caller-managed audit entry in sequence order.
     ///
-    /// Actually replaying them into the mmap files on crash recovery is
-    /// Phase 6 — this just hands back what's recorded.
+    /// This is an audit-log reader; public API recovery uses pending markers.
     pub fn replay_log(&self) -> Result<Vec<(u64, Operation)>> {
         let rtxn = self.env.read_txn()?;
         let entries: Result<Vec<(u64, Operation)>> =
             self.logs.iter(&rtxn)?.map(|entry| Ok(entry?)).collect();
         entries
+    }
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn create(&self, name: &str, dim: u32, metric: &str) -> Result<CollectionConfig> {
+        let mut txn = self.env.write_txn()?;
+        if self.collections.get(&txn, name)?.is_some() {
+            return Err(Error::CollectionAlreadyExists(name.into()));
+        }
+        let generation = self
+            .state
+            .get(&txn, "generation")?
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("generation exhausted".into()))?;
+        let config = CollectionConfig {
+            dim,
+            metric: metric.into(),
+            next_id: 0,
+            generation,
+            revision: 0,
+        };
+        self.state.put(&mut txn, "generation", &generation)?;
+        self.collections.put(&mut txn, name, &config)?;
+        self.pending.put(&mut txn, name, &Recovery::Rebuild)?;
+        txn.commit()?;
+        Ok(config)
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn insert(
+        &self,
+        collection: &str,
+        vector: &[f32],
+        metadata: &serde_json::Value,
+        offset: u64,
+    ) -> Result<u64> {
+        let mut txn = self.env.write_txn()?;
+        let mut config = self
+            .collections
+            .get(&txn, collection)?
+            .ok_or_else(|| Error::CollectionNotFound(collection.into()))?;
+        let id = self.state.get(&txn, "next_id")?.unwrap_or(0);
+        let next = id
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("ID space exhausted".into()))?;
+        config.next_id = next;
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("revision exhausted".into()))?;
+        self.state.put(&mut txn, "next_id", &next)?;
+        self.collections.put(&mut txn, collection, &config)?;
+        self.vectors.put(
+            &mut txn,
+            &id,
+            &VectorMeta {
+                collection: collection.into(),
+                offset,
+                dim: config.dim,
+            },
+        )?;
+        self.metadata.put(&mut txn, &id, metadata)?;
+        self.payloads.put(&mut txn, &id, &vector.to_vec())?;
+        self.pending.put(&mut txn, collection, &Recovery::Rebuild)?;
+        txn.commit()?;
+        Ok(id)
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn remove_vector(&self, collection: &str, id: u64) -> Result<bool> {
+        let mut txn = self.env.write_txn()?;
+        let Some(meta) = self.vectors.get(&txn, &id)? else {
+            return Ok(false);
+        };
+        if meta.collection != collection {
+            return Ok(false);
+        }
+        let mut config = self
+            .collections
+            .get(&txn, collection)?
+            .ok_or_else(|| Error::CollectionNotFound(collection.into()))?;
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("revision exhausted".into()))?;
+        self.collections.put(&mut txn, collection, &config)?;
+        self.vectors.delete(&mut txn, &id)?;
+        self.metadata.delete(&mut txn, &id)?;
+        self.payloads.delete(&mut txn, &id)?;
+        txn.commit()?;
+        Ok(true)
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn remove_collection(&self, collection: &str) -> Result<bool> {
+        let mut txn = self.env.write_txn()?;
+        if !self.collections.delete(&mut txn, collection)? {
+            return Ok(false);
+        }
+        let ids: Vec<u64> = self
+            .vectors
+            .iter(&txn)?
+            .filter_map(|r| match r {
+                Ok((id, meta)) if meta.collection == collection => Some(Ok(id)),
+                Ok(_) => None,
+                Err(e) => Some(Err(e)),
+            })
+            .collect::<std::result::Result<_, _>>()?;
+        for id in ids {
+            self.vectors.delete(&mut txn, &id)?;
+            self.metadata.delete(&mut txn, &id)?;
+            self.payloads.delete(&mut txn, &id)?;
+        }
+        self.pending.put(&mut txn, collection, &Recovery::Remove)?;
+        txn.commit()?;
+        Ok(true)
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn pending(&self) -> Result<Vec<(String, Recovery)>> {
+        let txn = self.env.read_txn()?;
+        self.pending
+            .iter(&txn)?
+            .map(|r| {
+                let (name, op) = r?;
+                Ok((name.to_owned(), op))
+            })
+            .collect()
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn payload(&self, id: u64) -> Result<Vec<f32>> {
+        let txn = self.env.read_txn()?;
+        self.payloads
+            .get(&txn, &id)?
+            .ok_or_else(|| Error::Corrupt(format!("missing recovery payload for vector {id}")))
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn mark_rebuild(&self, collection: &str) -> Result<()> {
+        let mut txn = self.env.write_txn()?;
+        let mut config = self
+            .collections
+            .get(&txn, collection)?
+            .ok_or_else(|| Error::CollectionNotFound(collection.into()))?;
+        config.revision = config
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error::Corrupt("revision exhausted".into()))?;
+        self.collections.put(&mut txn, collection, &config)?;
+        self.pending.put(&mut txn, collection, &Recovery::Rebuild)?;
+        txn.commit()?;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "metrics", feature = "serde-query"))]
+    pub(crate) fn checkpoint(&self, collection: &str, offsets: &[(u64, u64)]) -> Result<()> {
+        let mut txn = self.env.write_txn()?;
+        for &(id, offset) in offsets {
+            let mut meta = self
+                .vectors
+                .get(&txn, &id)?
+                .ok_or_else(|| Error::Corrupt("missing vector at checkpoint".into()))?;
+            meta.offset = offset;
+            self.vectors.put(&mut txn, &id, &meta)?;
+        }
+        self.pending.delete(&mut txn, collection)?;
+        txn.commit()?;
+        Ok(())
     }
 }
 
@@ -276,7 +517,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn open_creates_all_four_tables() {
+    fn open_initializes_storage_tables() {
         let dir = tempfile::tempdir().unwrap();
         let engine = KvEngine::open(dir.path()).unwrap();
         assert!(engine.get_collection("docs").unwrap().is_none());
@@ -293,6 +534,8 @@ mod tests {
             dim: 768,
             metric: "cosine".into(),
             next_id: 0,
+            generation: 0,
+            revision: 0,
         };
 
         engine.put_collection("docs", &config).unwrap();
@@ -307,6 +550,8 @@ mod tests {
             dim: 3,
             metric: "euclidean".into(),
             next_id: 0,
+            generation: 0,
+            revision: 0,
         };
         assert_eq!(config.metric(), Some(crate::metric::Metric::Euclidean));
 
@@ -314,6 +559,8 @@ mod tests {
             dim: 3,
             metric: "manhattan".into(),
             next_id: 0,
+            generation: 0,
+            revision: 0,
         };
         assert_eq!(unknown.metric(), None);
     }
@@ -329,6 +576,8 @@ mod tests {
                     dim: 1,
                     metric: "cosine".into(),
                     next_id: 0,
+                    generation: 0,
+                    revision: 0,
                 },
             )
             .unwrap();
@@ -339,6 +588,8 @@ mod tests {
                     dim: 1,
                     metric: "cosine".into(),
                     next_id: 0,
+                    generation: 0,
+                    revision: 0,
                 },
             )
             .unwrap();
@@ -357,6 +608,8 @@ mod tests {
                     dim: 1,
                     metric: "cosine".into(),
                     next_id: 0,
+                    generation: 0,
+                    revision: 0,
                 },
             )
             .unwrap();
@@ -377,6 +630,8 @@ mod tests {
                     dim: 1,
                     metric: "cosine".into(),
                     next_id: 0,
+                    generation: 0,
+                    revision: 0,
                 },
             )
             .unwrap();

@@ -7,36 +7,36 @@ cargo fmt --all --check
 echo "==> git diff --check"
 git diff --check
 
-echo "==> cargo check --workspace --all-targets --all-features"
-cargo check \
+echo "==> cargo check --locked --workspace --all-targets --all-features"
+cargo check --locked \
   --workspace \
   --all-targets \
   --all-features
 
-echo "==> cargo clippy --workspace --all-targets --all-features -- -D warnings"
-cargo clippy \
+echo "==> cargo clippy --locked --workspace --all-targets --all-features -- -D warnings"
+cargo clippy --locked \
   --workspace \
   --all-targets \
   --all-features \
   -- \
   -D warnings
 
-echo "==> cargo test --workspace --all-features (lib + integration)"
-cargo test \
+echo "==> cargo test --locked --workspace --all-features (lib + integration)"
+cargo test --locked \
   --workspace \
   --all-features \
   --lib \
   --tests
 
-echo "==> cargo test --doc --workspace --all-features"
-cargo test \
+echo "==> cargo test --locked --doc --workspace --all-features"
+cargo test --locked \
   --doc \
   --workspace \
   --all-features
 
 echo "==> rustdoc -D warnings"
 RUSTDOCFLAGS="-D warnings" \
-cargo doc \
+cargo doc --locked \
   --workspace \
   --no-deps \
   --all-features
