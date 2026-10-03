@@ -44,7 +44,7 @@ jobs:
       - name: Generate checksum manifest
         working-directory: dist
         run: sha256sum ./*.crate > SHA256SUMS
-      - uses: sigstore/cosign-installer@v3.7.0
+      - uses: sigstore/cosign-installer@v4.1.2
       - name: Sign manifest using GitHub OIDC
         run: cosign sign-blob --yes --bundle dist/SHA256SUMS.bundle dist/SHA256SUMS
       - name: Create draft GitHub release
