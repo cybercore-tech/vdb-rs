@@ -8,23 +8,17 @@ checksummed mmap vector files, and a persisted HNSW graph. No server required.
 
 **Alpha: `0.1.0-alpha.1`, Rust 1.88+, Linux and macOS on local filesystems.**
 The [signed GitHub alpha release](https://github.com/cybercore-tech/vdb-rs/releases/tag/v0.1.0-alpha.1)
-is available. Crates.io publication is pending a token with permission to publish
-new crates. Use the tagged Git dependency below until publication completes.
+is available, and [`cybercore-vdb`](https://crates.io/crates/cybercore-vdb) is published
+on crates.io. Install it as `vdb` using the dependency alias below.
 The previous pre-alpha on-disk format is incompatible;
 export old databases with their original revision before upgrading. This release
 rejects populated legacy databases rather than interpreting them incorrectly.
 
 ```toml
 [dependencies]
-vdb = { package = "cybercore-vdb", git = "https://github.com/cybercore-tech/vdb-rs", tag = "v0.1.0-alpha.1" }
+vdb = { package = "cybercore-vdb", version = "=0.1.0-alpha.1" }
 serde_json = "1"
 tempfile = "3" # only needed for the temporary-directory example
-```
-
-After crates.io publication, replace the Git dependency with:
-
-```toml
-vdb = { package = "cybercore-vdb", version = "=0.1.0-alpha.1" }
 ```
 
 ```rust

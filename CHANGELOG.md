@@ -6,8 +6,8 @@ No changes yet.
 
 ## 0.1.0-alpha.1
 
-First public alpha, packaged as `cybercore-vdb` with the library name `vdb`.
-Available as a signed GitHub release; crates.io publication awaits publishing-token permissions.
+First public alpha, published on crates.io as `cybercore-vdb` with the library name
+`vdb`. A signed crate and checksum manifest are also available in the GitHub release.
 
 - Finalize registry metadata and installation instructions; keep the repository
   name `vdb-rs` because both `vdb` and `vdb-rs` are already registered crates.
