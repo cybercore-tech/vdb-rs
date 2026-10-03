@@ -1,13 +1,19 @@
 [package]
-name = "vdb"
+name = "cybercore-vdb"
 version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Embedded, crash-safe, Rust-native vector database (LMDB metadata + mmap'd vectors/HNSW index)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/cybercore-tech/vdb-rs"
+homepage = "https://cybercore-tech.github.io/vdb-rs/"
+documentation = "https://docs.rs/cybercore-vdb"
+readme = "README.md"
 keywords = ["vector-database", "embedded", "ann", "hnsw", "lmdb"]
 categories = ["database-implementations", "data-structures"]
+
+[lib]
+name = "vdb"
 
 [features]
 default = ["storage", "index-hnsw", "metrics", "serde-query"]

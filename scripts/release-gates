@@ -27,7 +27,7 @@ case "$mode" in
         exit 1
       fi
       ./scripts/validate-package.sh
-      cargo publish --locked --dry-run -p vdb
+      cargo publish --locked --dry-run -p cybercore-vdb
     fi
     ;;
   *) echo 'Usage: ./scripts/release-gates [quick|full|release]' >&2; exit 2 ;;

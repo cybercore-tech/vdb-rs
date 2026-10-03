@@ -7,13 +7,14 @@ An embedded Rust vector database with LMDB transactions, durable recovery,
 checksummed mmap vector files, and a persisted HNSW graph. No server required.
 
 **Alpha: `0.1.0-alpha.1`, Rust 1.88+, Linux and macOS on local filesystems.**
-Not published to crates.io. The previous pre-alpha on-disk format is incompatible;
+Install the [`cybercore-vdb`](https://crates.io/crates/cybercore-vdb) package as `vdb`
+using the dependency alias below. The previous pre-alpha on-disk format is incompatible;
 export old databases with their original revision before upgrading. This release
 rejects populated legacy databases rather than interpreting them incorrectly.
 
 ```toml
 [dependencies]
-vdb = { git = "https://github.com/cybercore-tech/vdb-rs" }
+vdb = { package = "cybercore-vdb", version = "=0.1.0-alpha.1" }
 serde_json = "1"
 tempfile = "3" # only needed for the temporary-directory example
 ```

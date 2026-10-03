@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.1.0-alpha.1
+
+First public alpha, published as `cybercore-vdb` with the library name `vdb`.
+
+- Finalize registry metadata and installation instructions; keep the repository
+  name `vdb-rs` because both `vdb` and `vdb-rs` are already registered crates.
+
 - Add atomic `upsert_batch` with ordered database-wide IDs, shared vector-file sync,
   full validation before mutation, transaction rollback and interrupted-batch recovery.
 - Refresh HNSW incrementally from clean older snapshots, including after reopening;
@@ -14,8 +23,6 @@
   report copy, and `just semantic-search-json` for automation. Private artifacts stay local.
 - Extend CI/MSRV/release gates with frozen public embeddings and Python helper checks;
   document pilot results and update the project site with current measurements.
-
-## 0.1.0-alpha.1
 
 - Fix cross-collection ID collisions, foreign-ID deletion and delete/recreate failures.
 - Add collection generations, serialized snapshots and exclusive directory locking.

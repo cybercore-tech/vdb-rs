@@ -169,7 +169,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Inspect package contents
-        run: cargo package --locked --list -p vdb
+        run: cargo package --locked --list -p cybercore-vdb
 
       - name: Build and verify distributable crate
         run: ./scripts/validate-package.sh

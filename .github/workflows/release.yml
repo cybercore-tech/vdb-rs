@@ -56,4 +56,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             dist/*.crate dist/SHA256SUMS dist/SHA256SUMS.bundle \
             --draft "${prerelease[@]}" --generate-notes \
-            --title "vdb ${GITHUB_REF_NAME#v}"
+            --title "cybercore-vdb ${GITHUB_REF_NAME#v}"
